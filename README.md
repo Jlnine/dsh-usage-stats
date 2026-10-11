@@ -67,11 +67,15 @@ dsh plugin --profile web add @xfqz86/dsh-usage-stats
 
 > 这是上游发布的正式包，**不含本仓库的增强**；要装本仓库的版本请用下面的 GitHub 或 tarball 方式。
 
-### 从 GitHub 安装
+### 从 GitHub 安装（源码，安装时自构建）
 
 ```bash
-dsh plugin --profile web add github:Jlnine/dsh-usage-stats#release
+dsh plugin --profile web add github:Jlnine/dsh-usage-stats
 ```
+
+> 安装时经 `prepare: tsdown` 自动构建，取到的始终是 main 的最新源码。上游另有预构建的
+> `release` 分支形态（`github:Jlnine/dsh-usage-stats#release`）；本 fork 的 `release` 分支需等
+> 仓库 Actions 启用、main 的 CI 跑绿后由工作流同步，启用前该形态仍是上游旧产物，不建议使用。
 
 ### 从 tarball 安装
 
@@ -79,7 +83,8 @@ dsh plugin --profile web add github:Jlnine/dsh-usage-stats#release
 dsh plugin --profile web add https://github.com/Jlnine/dsh-usage-stats/releases/latest/download/xfqz86-dsh-usage-stats.tgz
 ```
 
-> 固定地址，始终指向本仓库最新 Release 的 tarball（文件名沿用包名，不含版本号）。
+> 固定地址，指向本仓库最新 Release 的 tarball（文件名沿用包名，不含版本号）；本仓库尚未发布
+> Release，发布后该地址才可用。
 
 ### 本地开发
 
