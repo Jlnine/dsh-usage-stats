@@ -74,8 +74,9 @@ dsh plugin --profile web add github:Jlnine/dsh-usage-stats
 ```
 
 > 安装时经 `prepare: tsdown` 自动构建，取到的始终是 main 的最新源码。上游另有预构建的
-> `release` 分支形态（`github:Jlnine/dsh-usage-stats#release`）；本 fork 的 `release` 分支需等
-> 仓库 Actions 启用、main 的 CI 跑绿后由工作流同步，启用前该形态仍是上游旧产物，不建议使用。
+> `release` 分支形态（`github:Jlnine/dsh-usage-stats#release`）；本 fork 的 `release` 分支由
+> 工作流在 main 的 CI 跑绿后自动同步（fork 仓库需先在 Actions 页启用工作流），启用前该形态
+> 仍是上游旧产物，不建议使用。
 
 ### 从 tarball 安装
 
@@ -83,8 +84,7 @@ dsh plugin --profile web add github:Jlnine/dsh-usage-stats
 dsh plugin --profile web add https://github.com/Jlnine/dsh-usage-stats/releases/latest/download/xfqz86-dsh-usage-stats.tgz
 ```
 
-> 固定地址，指向本仓库最新 Release 的 tarball（文件名沿用包名，不含版本号）；本仓库尚未发布
-> Release，发布后该地址才可用。
+> 固定地址，始终指向本仓库最新 Release 的 tarball（文件名沿用包名，不含版本号）。
 
 ### 本地开发
 
@@ -109,7 +109,7 @@ dsh plugin --profile web remove @xfqz86/dsh-usage-stats
 
 **「服务商」Tab（额度监控一家一卡）**：DeepSeek 余额、Z.ai 额度、OpenCode Go 额度与内置三家余额厂商（SiliconFlow、小米 MiMo、火山引擎）、自助添加的厂商，每家都可在卡片内：
 
-- 直接填入 API Key 并点「保存」：Key 经插件写入 DSH 凭据中心（`~/.dsh/.credentials.yaml`，0600），**不回显、不进配置文件**；变量名已有 Key 时会先要求二次确认覆盖；火山引擎（AK/SK 两项）与小米 MiMo（API Key 或 Cookie 二选一）按卡片内提示填写；
+- 直接填入 API Key 并点「保存」：Key 经插件写入 DSH 凭据中心（`~/.dsh/.credentials.yaml`，0600），**不回显、不进配置文件**；变量名已有 Key 时会先要求二次确认覆盖；火山引擎填账号级 AccessKey ID / Secret 两项（V4 HMAC 签名，非推理 Bearer Key，可在卡片上切换「套餐用量 / 账户余额」），小米 MiMo 只填浏览器登录 Cookie（余额接口不接受 API Key），按卡片内提示填写；
 - 开关「启用监控」（关闭即停止轮询）、「在侧边栏展示」（开启即在侧边栏底部出现该家额度芯片，数据未加载时先显示占位横杠）；
 - 调整抓取间隔（默认 5 分钟，下限 3 分钟）。
 
@@ -132,7 +132,7 @@ dsh plugin --profile web remove @xfqz86/dsh-usage-stats
 
 ## 服务商额度
 
-详情面板的「服务商」Tab 聚合各家额度 / 余额，一家一卡。内置三家开箱即用：SiliconFlow（`SILICONFLOW_API_KEY`）、小米 MiMo（`XIAOMI_MIMO_API_KEY`，套餐查询兼容 `XIAOMI_TOKEN_PLAN_CN`）、火山引擎（`VOLCENGINE_ACCESS_KEY_ID` + `VOLCENGINE_SECRET_ACCESS_KEY`，HMAC 签名）——Key 既可在此页直接填入保存，也可在 DSH 凭据中心配置。
+详情面板的「服务商」Tab 聚合各家额度 / 余额，一家一卡。内置三家开箱即用：SiliconFlow（`SILICONFLOW_API_KEY`）、小米 MiMo（凭据变量名 `XIAOMI_TOKEN_PLAN_CN`，值为浏览器登录 Cookie 串；查的是账户金额余额，不使用 `XIAOMI_MIMO_API_KEY`）、火山引擎（`VOLCENGINE_ACCESS_KEY_ID` + `VOLCENGINE_SECRET_ACCESS_KEY`，V4 HMAC 签名，默认显示 Agent Plan 套餐用量、可切到账户余额）——Key 既可在此页直接填入保存，也可在 DSH 凭据中心配置。火山套餐接口对某账号返回空（套餐名与各窗口额度均为 0）时显示暂无数据，需确认该 AK/SK 来自开通 Agent Plan 的同一主账号；MiMo Cookie 在重新登录后可能失效，需重新粘贴覆盖。
 
 也可以在该页直接添加任意 **Bearer 鉴权** 的余额厂商：
 
