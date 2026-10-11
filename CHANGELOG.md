@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-11
+
+### 新增
+
+- **「服务商」页可直接添加任意 Bearer 余额厂商**：填显示名、凭据变量名和 API Key 即可，Key 经插件直接写入 DSH 凭据中心（不进配置文档、不回显），保存即完成添加；内置 Kimi、OpenRouter 预置模板（余额地址与字段自动带出），也支持「通用」手填任意 https 余额地址、余额 JSON 字段路径与币种。同名变量已存在时会先二次确认是否覆盖；删除服务商卡片只删配置、保留凭据中心里的 Key。
+- **额度监控全部集中到「服务商」页，一家一卡**：DeepSeek 余额、Z.ai 额度、OpenCode Go 额度从「设置」页迁到「服务商」页，与 SiliconFlow、小米 MiMo、火山引擎和自助添加的厂商排在一起；每张卡片都能直接填入 API Key 并保存（写入 DSH 凭据中心）、开关「启用监控」与「在侧边栏展示」、调整抓取间隔（最短 3 分钟），卡片内同时显示该家当前余额 / 额度明细。
+- **侧边栏底部展示已开启厂商的额度**：在「服务商」页勾选「在侧边栏展示」即出现对应芯片（宽列显示名称 + 金额或额度百分比，折叠态显示迷你芯片，悬浮看完整明细）；未配置 Key、未订阅或查询失败有对应提示，数据未加载时先显示占位横杠。
+
+### 变更
+
+- **「设置」页只保留与统计本身相关的偏好**：模型统计重定向、会话徽标与账本操作；DeepSeek / Z.ai / OpenCode Go 与各服务商的开关、侧边栏展示和抓取间隔统一在「服务商」页卡片里改。内置三家由原来的一个总开关改为按家开关，旧设置自动沿用。
+
 ## [0.4.7] - 2026-09-30
 
 ### 修复
@@ -156,7 +168,8 @@
 - 首次启动自动统计全部历史会话，之后实时增量，重启不丢数据
 - OpenCode Go 额度：滚动 5 小时 / 本周 / 本月三档剩余额度，偏好支持总开关与抓取间隔
 
-[Unreleased]: https://github.com/xfqz86/dsh-usage-stats/compare/v0.4.7...HEAD
+[Unreleased]: https://github.com/Jlnine/dsh-usage-stats/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/Jlnine/dsh-usage-stats/compare/v0.4.7...v0.5.0
 [0.4.7]: https://github.com/xfqz86/dsh-usage-stats/compare/v0.4.6...v0.4.7
 [0.4.6]: https://github.com/xfqz86/dsh-usage-stats/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/xfqz86/dsh-usage-stats/compare/v0.4.4...v0.4.5

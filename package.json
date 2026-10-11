@@ -1,6 +1,6 @@
 {
   "name": "@xfqz86/dsh-usage-stats",
-  "version": "0.4.7",
+  "version": "0.5.0",
   "description": "DSH web plugin: token usage statistics in the sidebar footer — today badge (wide/rail) opening a detail panel with per-model/provider breakdown, session list, daily trend curve and heatmap (host scans session logs, serves usageStats Remote methods)",
   "type": "module",
   "main": "lib/index.js",
@@ -25,7 +25,7 @@
   "packageManager": "pnpm@11.7.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/xfqz86/dsh-usage-stats.git"
+    "url": "git+https://github.com/Jlnine/dsh-usage-stats.git"
   },
   "keywords": [
     "deepseek-harness",
