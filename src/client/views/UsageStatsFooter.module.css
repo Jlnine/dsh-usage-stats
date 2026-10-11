@@ -25,6 +25,20 @@
   white-space: nowrap;
 }
 
+/* 自定义厂商名可能较长：宽列标签与 rail 上行名都限制宽度并省略号，避免顶破侧边栏。 */
+.customGoLabel {
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.customRailLabel {
+  display: block;
+  max-width: 32px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* rail 折叠态：滚动 5 小时额度芯片，位于圆形按钮上方。 */
 .goRailChip {
   flex: none;

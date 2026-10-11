@@ -1,0 +1,82 @@
+/* 服务商卡片内的 Key 输入与保存行：多变量名并排的紧凑密码框 + 保存按钮。
+   颜色全部使用设计 token（见 test/styles.mjs 对照表）。 */
+
+.keyRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-left: auto;
+  min-width: 0;
+}
+
+.keyInput {
+  width: 138px;
+  padding: 3px 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-2);
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.keyInput::placeholder {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.keyInput:focus {
+  outline: none;
+  border-color: var(--dsw-alias-brand-primary);
+}
+
+.saveBtn,
+.saveBtnDanger {
+  flex: none;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 16px;
+  cursor: pointer;
+}
+
+.saveBtn {
+  color: var(--dsw-alias-brand-primary, var(--dsw-alias-label-secondary));
+}
+
+.saveBtnDanger {
+  color: var(--dsw-alias-state-error-primary, #e5484d);
+}
+
+.saveBtn:hover,
+.saveBtnDanger:hover {
+  text-decoration: underline;
+}
+
+.saveBtn:disabled,
+.saveBtnDanger:disabled {
+  cursor: progress;
+  opacity: 0.6;
+  text-decoration: none;
+}
+
+/* 覆盖确认提示与错误提示：整行独占，右对齐 */
+.keyWarn,
+.keyError {
+  flex-basis: 100%;
+  text-align: right;
+  font-size: 10px;
+  line-height: 14px;
+}
+
+.keyWarn {
+  color: var(--dsw-alias-state-warn-primary, #b45309);
+}
+
+.keyError {
+  color: var(--dsw-alias-state-error-primary, #e5484d);
+}

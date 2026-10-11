@@ -1,11 +1,11 @@
 /**
  * 用量统计的服务端 Host 服务：账本模式装配，自管理 sqlite 介质，对外暴露
- * usageStats 命名空间的 7 个一元 Remote 方法。
+ * usageStats 命名空间的 8 个一元 Remote 方法。
  *
  * 数据流（账本为唯一事实来源、聚合为派生缓存）与原 apply 函数版一致：
  * openLedger → 先挂 session/event 实时监听 →
  * bootstrap（预统计快加载、事件重放、首启全量扫描三档回退）。信任与认证由
- * 网关载体统一处理，本服务只做业务：快照、重建、清零、密封、三路额度。
+ * 网关载体统一处理，本服务只做业务：快照、重建、清零、密封、四路额度。
  *
  * 方法签名遵守严格 Remote 约定：公开非静态实例方法、非泛型、
  * 参数为具名必填简单标识符（无 lookup、无 signal），请求与结果均为
@@ -13,11 +13,15 @@
  */
 
 import { Service } from '@deepseek-ai/cordis';
+import { credentialRef } from '@deepseek-ai/dsh-credentials';
 import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol';
+
+import { BUILTIN_PROVIDER_IDS, CREDENTIAL_REF_PATTERN, CREDENTIAL_VALUE_MAX_LENGTH, CUSTOM_PROVIDER_MAX, errorMessage } from '../utils.ts';
 
 import { queryDeepSeekBalance } from './deepseekBalance.ts';
 import { queryGoQuota } from './goquota.ts';
 import { Ledger } from './ledger.ts';
+import { queryProviderQuotas } from './providerQuota.ts';
 import { scanOnce, rebuildFromEvents, rebuildWithDelta, resetStore, sealAggregates } from './scan.ts';
 import { recoverLegacyUsageSettings, UsageSettingsSchema } from './settings.ts';
 import { snapshot } from './snapshot.ts';
@@ -28,17 +32,24 @@ import { queryZaiQuota } from './zaiQuota.ts';
 // SessionEventMap；协议类型集中 src/types.ts。
 import type {
   ClearResult,
+  CustomProviderQuery,
   DeepSeekBalance,
+  DescribeCredentialRequest,
+  DescribeCredentialResult,
   GoQuota,
+  ProviderQuotas,
+  ProviderQuotasRequest,
   QuotaRequest,
   RebuildResult,
+  SaveCredentialRequest,
+  SaveCredentialResult,
   SealResult,
   SnapshotRequest,
   UsageSnapshot,
   ZaiQuota,
 } from '../types.ts';
 import type { Context } from '@deepseek-ai/cordis';
-import type {} from '@deepseek-ai/dsh-credentials';
+import type { CredentialProvider } from '@deepseek-ai/dsh-credentials';
 import type { Session, SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session';
 import type {} from '@deepseek-ai/dsh-session-persistence';
 import type {} from '@deepseek-ai/dsh-session-query';
@@ -54,6 +65,10 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
   interface RemoteErrorDetailsMap {
     /** 写操作被并发的扫描/重建占用。 */
     'usageStats/busy': { readonly operation: string }
+    /** 凭据方法入参非法（变量名/密钥不合规）。 */
+    'usageStats/bad-request': { readonly reason: string }
+    /** 当前部署的凭据中心不支持写入（缺席或只读），无法在插件内保存 Key。 */
+    'usageStats/credentials-unavailable': Record<string, never>
   }
 }
 
@@ -65,6 +80,20 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
 function credentialsOf(ctx: Context): Context['credentials'] | undefined {
   const credentials = ctx.get('credentials');
   return typeof credentials?.resolve === 'function' ? credentials : undefined;
+}
+
+/** 可写凭据服务：基座 seam 只声明读，写入方法由本地凭据实现提供，结构探测后使用。 */
+type WritableCredentials = CredentialProvider & {
+  write(ref: string, value: string): Promise<unknown>;
+};
+
+/**
+ * 取支持写入的凭据中心：仅当运行时凭据服务暴露 write（本地凭据实现）时返回，
+ * 缺席或只读部署返回 undefined，由 saveCredential 转成明确错误，不假设一定可写。
+ */
+function credentialsForWrite(ctx: Context): WritableCredentials | undefined {
+  const credentials = ctx.get('credentials') as unknown as WritableCredentials | undefined;
+  return typeof credentials?.write === 'function' ? credentials : undefined;
 }
 
 /** 打开/创建账本：版本不兼容或损坏时自动清库重建，保存与连接由 Ledger 负责。 */
@@ -295,5 +324,105 @@ export default class UsageStatsService extends TypertRemoteService {
     // 默认 false 保持轮询语义，有效 TTL 内返回缓存，仍受 3 分钟强制下限保护。
     const force = request.force === true;
     return queryZaiQuota(intervalMinutes, force, credentialsOf(this.ctx));
+  }
+
+  /**
+   * usageStats/providerQuotas：内置三家（SiliconFlow / 小米 MiMo / 火山引擎）与用户
+   * 自助添加的 Bearer 余额厂商，按请求范围（选中内置家 + 自定义列表）聚合返回，
+   * TTL 缓存 + 单飞（按范围形状分桶）。
+   * @param request - 抓取间隔、强制刷新、内置家 id 子集、自定义厂商查询列表。
+   * @returns 服务商额度 value（各条 no-key/error 不抛错，由客户端按 status 本地化）。
+   */
+  @Remote('providerQuotas')
+  async providerQuotas(request: ProviderQuotasRequest): Promise<ProviderQuotas> {
+    const intervalMinutes = typeof request.intervalMinutes === 'number' && Number.isFinite(request.intervalMinutes)
+      ? request.intervalMinutes
+      : undefined;
+    // force=true 服务商页"立即刷新"，绕过 TTL 缓存强制重新抓取；
+    // 默认 false 保持轮询语义，有效 TTL 内返回缓存，仍受 3 分钟强制下限保护。
+    const force = request.force === true;
+    // 线路入参做一次防御投影：内置家只收白名单 id，自定义条只取白名单字段并重新校验
+    // https 与凭据变量名；zod 已保证基本类型，这里挡住手改客户端发来的畸形条目。
+    const builtinIds: string[] = [];
+    if (Array.isArray(request.builtinIds)) {
+      for (const rawId of request.builtinIds) {
+        if (typeof rawId !== 'string') continue;
+        const id = rawId.trim();
+        if (!(BUILTIN_PROVIDER_IDS as readonly string[]).includes(id) || builtinIds.includes(id)) continue;
+        builtinIds.push(id);
+      }
+    }
+    const providers: CustomProviderQuery[] = [];
+    if (Array.isArray(request.providers)) {
+      for (const item of request.providers) {
+        if (providers.length >= CUSTOM_PROVIDER_MAX) break;
+        if (item === null || typeof item !== 'object') continue;
+        const p = item as Partial<CustomProviderQuery>;
+        const id = typeof p.id === 'string' ? p.id.trim() : '';
+        const endpoint = typeof p.endpoint === 'string' ? p.endpoint.trim() : '';
+        const ref = typeof p.credentialRef === 'string' ? p.credentialRef.trim() : '';
+        if (id === '' || !/^https:\/\//i.test(endpoint) || !CREDENTIAL_REF_PATTERN.test(ref)) continue;
+        const valuePath = typeof p.valuePath === 'string' && p.valuePath.trim() !== '' ? p.valuePath.trim() : 'data.balance';
+        const currency = typeof p.currency === 'string' && p.currency.trim() !== '' ? p.currency.trim().slice(0, 8) : 'CNY';
+        providers.push({ id, endpoint, credentialRef: ref, valuePath, currency });
+      }
+    }
+    return queryProviderQuotas(intervalMinutes, force, credentialsOf(this.ctx), { builtinIds, providers });
+  }
+
+  /**
+   * usageStats/describeCredential：探测某环境变量名当前是否已配置、凭据中心是否可写。
+   * 用于「服务商」页保存前提示同名覆盖；只回布尔状态，绝不回传密钥值。
+   */
+  @Remote('describeCredential')
+  async describeCredential(request: DescribeCredentialRequest): Promise<DescribeCredentialResult> {
+    const ref = typeof request?.ref === 'string' ? request.ref.trim() : '';
+    if (!CREDENTIAL_REF_PATTERN.test(ref)) {
+      throw new RemoteError('usageStats/bad-request', '凭据变量名非法', { reason: 'invalid-ref' });
+    }
+    const credentials = credentialsOf(this.ctx);
+    let configured = false;
+    if (credentials) {
+      try {
+        const resolved = await credentials.resolve(credentialRef(ref));
+        configured = !!(resolved && typeof resolved.value === 'string' && resolved.value.trim().length > 0);
+      } catch {
+        configured = false;
+      }
+    }
+    return { ref, configured, writable: credentialsForWrite(this.ctx) !== undefined };
+  }
+
+  /**
+   * usageStats/saveCredential：把「服务商」页填写的 API Key 存入 DSH 凭据中心。
+   *
+   * 密钥只在本次请求内出现，经凭据服务原子写入 `~/.dsh/.credentials.yaml`
+   * （0600、文件锁、写完热更新），不进偏好文档、日志与返回值。env 只读同名
+   * （凭据服务 assertUnshadowed）或凭据中心不可写时抛错，由客户端给出可操作提示。
+   */
+  @Remote('saveCredential')
+  async saveCredential(request: SaveCredentialRequest): Promise<SaveCredentialResult> {
+    const ref = typeof request?.ref === 'string' ? request.ref.trim() : '';
+    const value = typeof request?.value === 'string' ? request.value : '';
+    if (!CREDENTIAL_REF_PATTERN.test(ref)) {
+      throw new RemoteError('usageStats/bad-request', '凭据变量名非法', { reason: 'invalid-ref' });
+    }
+    if (value.length === 0) {
+      throw new RemoteError('usageStats/bad-request', 'API Key 不能为空', { reason: 'empty-value' });
+    }
+    if (value.length > CREDENTIAL_VALUE_MAX_LENGTH) {
+      throw new RemoteError('usageStats/bad-request', 'API Key 超出长度上限', { reason: 'value-too-long' });
+    }
+    const credentials = credentialsForWrite(this.ctx);
+    if (!credentials) {
+      throw new RemoteError('usageStats/credentials-unavailable', '凭据中心当前不可写，无法在此保存 Key', {});
+    }
+    try {
+      await credentials.write(credentialRef(ref), value);
+    } catch (error) {
+      // env 只读同名等写入失败：透传凭据服务的可读原因，转 bad-request 由客户端提示。
+      throw new RemoteError('usageStats/bad-request', errorMessage(error), { reason: 'write-failed' });
+    }
+    return { saved: true, ref };
   }
 }

@@ -31,6 +31,9 @@ dsh-usage-stats/
 │       ├── release-branch.yml ← 同步 release 分支：仅含预构建交付物的最小形态（GitHub 安装路径）
 │       └── release.yml ← 发布到 npm 与交付 tarball（GitHub Release 附件只附固定别名；版本化产物走 workflow artifact）
 ├── docs/
+│   ├── design-specs/
+│   │   ├── custom-providers.md
+│   │   └── provider-cards.md
 │   ├── releases/
 │   │   ├── v0.1.0.md
 │   │   ├── v0.1.1.md
@@ -43,7 +46,8 @@ dsh-usage-stats/
 │   │   ├── v0.4.3.md
 │   │   ├── v0.4.4.md
 │   │   ├── v0.4.5.md
-│   │   └── v0.4.6.md
+│   │   ├── v0.4.6.md
+│   │   └── v0.4.7.md
 │   ├── screenshot/
 │   │   ├── 01-overview.png
 │   │   ├── 02-dates.png
@@ -55,6 +59,8 @@ dsh-usage-stats/
 │   ├── ARCHITECTURE.md ← 架构与统计口径唯一权威（账本/数据流/折叠/墓碑/口径；AGENTS.md 只留规则与指针）
 │   ├── STRUCTURE.md ← 生成文件：由 `pnpm tree` 重新生成，勿手改
 │   └── STYLE.md ← 风格经验沉淀（lint 之外的统一约定，新会话先读）
+├── memory/
+│   └── agent-log.md
 ├── scripts/
 │   ├── css-modules-inline.mjs ← rolldown 插件：把 *.module.css 编译成「scoped 类名映射 + 样式内联注入」的 JS 模块。
 │   └── gen-tree.mjs ← 生成 docs/STRUCTURE.md：反射仓库真实结构，避免目录树手写漂移。
@@ -89,10 +95,18 @@ dsh-usage-stats/
 │   │   │   ├── ModelsTab.tsx ← 模型 Tab：按模型/Provider 拆分表，含占比条，布局与会话 Tab 对齐。
 │   │   │   ├── OverviewTab.module.css ← 概览 Tab OverviewTab：Bento 磁贴网格 — 布局见布局图：今日/总计左列，热力图右大区，底行 DeepSeek/Go。
 │   │   │   ├── OverviewTab.tsx ← 概览 Tab，Bento 磁贴网格，包含「今日」与「总计」英雄磁贴，左列上下两格， 右大区为「热力图」占 3 列 2 行，底行含「DeepSeek 余额」、「OpenCode Go 额度」与「Z.ai 额度」， 各卡片受监控开关控制，未启用时隐藏，布局严格按布局图分区，使用 grid-template-areas，独立成文件。
+│   │   │   ├── ProviderForm.module.css ← 添加 / 编辑自定义服务商表单。
+│   │   │   ├── ProviderForm.tsx ← 添加 / 编辑一个自定义 Bearer 余额服务商。
+│   │   │   ├── ProviderKeyRow.module.css ← 服务商卡片内的 Key 输入与保存行：多变量名并排的紧凑密码框 + 保存按钮。
+│   │   │   ├── ProviderKeyRow.tsx ← 服务商卡片内的 Key 输入与保存行：该服务商的凭据变量名各配一个密码框 （如火山引擎两项 AK/SK），保存把非空输入经 Remote 写进 DSH 凭据中心 （不进配置文档、不回显、不进日志）。
+│   │   │   ├── ProvidersTab.module.css ← 服务商 Tab ProvidersTab：SiliconFlow / 小米 MiMo / 火山引擎 额度卡片列表。
+│   │   │   ├── ProvidersTab.tsx ← 服务商 Tab：内置六家一家一卡——DeepSeek 余额、Z.ai 额度、OpenCode Go 额度三家 （各自独立监控，数据显示来自底部角标同一份轮询）与 SiliconFlow / 小米 MiMo / 火山引擎三家余额厂商（服务端 usageStats/providerQuotas 一次聚合返回，本组件在 Tab 挂载期间轮询，切走即停止），加上用户自助添加的 Bearer 余额厂商。
+│   │   │   ├── ProviderSwitchRows.module.css ← 服务商卡片内的偏好行（启用监控 / 侧边栏展示 / 抓取间隔）： 行间分割线、右对齐控件，风格对齐设置页的偏好分组行。
+│   │   │   ├── ProviderSwitchRows.tsx ← 服务商卡片内的三项偏好行：启用监控 / 在侧边栏展示 / 抓取间隔（下限 3 分钟）。
 │   │   │   ├── SessionsTab.module.css ← 会话 Tab SessionsTab：主会话折叠按钮、子行与徽标、横向滚动容器，表格样式在共用基元里。
 │   │   │   ├── SessionsTab.tsx ← 会话 Tab：按会话表分页展示，每页 20 条，子代理折叠到主会话，带加号展开，数据完整展示。
 │   │   │   ├── SettingsTab.module.css ← 设置 Tab SettingsTab：操作按钮含重建账本状态、偏好设置行、 抓取间隔数字输入、可折叠账本操作与底部页脚。
-│   │   │   ├── SettingsTab.tsx ← 设置 Tab：偏好设置，含 DeepSeek 余额、OpenCode Go 额度与 Z.ai 额度监控各三项，账本操作折叠内含清零与重建，底部页脚含事件数与更新时间。
+│   │   │   ├── SettingsTab.tsx ← 设置 Tab：偏好设置只保留与用量统计本身相关的项——模型统计重定向与会话徽标， 账本操作折叠内含清零与重建，底部页脚含事件数与更新时间。
 │   │   │   ├── UsageHeatmap.module.css ← 概览 Tab 的 26 周热力图网格（UsageHeatmap）：Codex 风格列布局、4 档强度、 月份标签、今日外框高亮。
 │   │   │   ├── UsageHeatmap.tsx ← 概览 Tab 的 26 周热力图：Codex 风格网格，列为周、行为周一至周日， 含 4 档强度、月份标签与今日高亮。
 │   │   │   ├── UsageStatsFooter.module.css ← 侧边栏底部动作层，支持宽列与 56px rail 两种形态，几何与 harness 的 CordisPanel 侧边栏底部动作一致；颜色全部使用设计 token。
@@ -107,24 +121,29 @@ dsh-usage-stats/
 │   │   ├── stats.ts ← 用量统计界面的纯函数：格式化、分桶、曲线与热力图几何、模型统计重定向归并。
 │   │   ├── useConfirmOp.ts ← 二次确认操作 hook（浏览器端）。
 │   │   ├── useIntervalText.ts ← 抓取间隔输入 hook（浏览器端）。
-│   │   ├── useQuota.ts ← 额度轮询 hooks（浏览器端）：共享轮询骨架 useQuota + Go/DeepSeek/Z.ai 三路薄包装。
+│   │   ├── useQuota.ts ← 额度轮询 hooks（浏览器端）：共享轮询骨架 useQuota + Go/DeepSeek/Z.ai 三路薄包装 与聚合三家的服务商额度 useProviderQuotas。
 │   │   ├── useSnapshot.ts ← 用量统计浏览器端（Client）的快照轮询。
 │   │   ├── useSortTable.ts ← 表格排序分页三件套（浏览器端）。
 │   │   └── useUsageSettings.ts ← 偏好设置的 React hook（浏览器端）。
 │   ├── host/
 │   │   ├── agg.ts ← 聚合口径与纯函数：Agg、SessionInfo 结构，折叠原子操作 newAgg、ink， 事件守卫 usable、modelKeyOf。
+│   │   ├── customProviderQuota.ts ← 自定义 Bearer 余额厂商查询（用户在「服务商」页自助添加）。
 │   │   ├── deepseekBalance.ts ← DeepSeek 余额查询：通过 `GET https://api.deepseek.com/user/balance` 获取当前余额。
 │   │   ├── goquota.ts ← OpenCode Go 订阅额度查询：滚动 5 小时 / 本周 / 本月三档用量百分比 与重置时间，端点为 `GET https://opencode.ai/zen/go/v1/usage`。
 │   │   ├── index.ts ← 用量统计的服务端 Host 插件入口：default 导出服务类，由 Loader 实例化。
 │   │   ├── ledger.ts ← 原始事件流账本 Ledger：用量事件的唯一事实来源 —— 自管理 SQLite。
 │   │   ├── logs.ts ← 会话日志的目录发现与 NDJSON 解析。
+│   │   ├── mimoQuota.ts ← 小米 MiMo 套餐额度查询：端点为 `GET https://platform.xiaomimimo.com/api/v1/tokenPlan/usage`。
+│   │   ├── providerQuota.ts ← 服务商额度统一查询入口：内置 SiliconFlow / 小米 MiMo / 火山引擎三家，外加用户在 「服务商」页自助添加的 Bearer 余额厂商，各自查询后聚合成一个 ProviderQuotas 下发， 带 TTL 缓存与单飞（同一请求形状并发只打一轮官方端点）。
 │   │   ├── quota.ts ← 额度查询共享基元（服务端）：浏览器 UA、key 回退解析、TTL 缓存单飞工厂。
 │   │   ├── rawlog.ts ← 会话原始日志的物理代次识别与多帧 zstd 解码：扫描拼接 zstd 帧边界后逐帧解压为 NDJSON 文本，供扫描链路在 harness 读取失败时兜底读取旧代次会话。
 │   │   ├── scan.ts ← 会话扫描编排，账本导入：把磁盘原始日志 ∪ harness 会话清单的会话 id 全集逐会话读取，经 foldRecord 写入账本（events、session_meta 共 9 表， 含 agg_* 预统计）并折叠聚合缓存。
-│   │   ├── service.ts ← 用量统计的服务端 Host 服务：账本模式装配，自管理 sqlite 介质，对外暴露 usageStats 命名空间的 7 个一元 Remote 方法。
+│   │   ├── service.ts ← 用量统计的服务端 Host 服务：账本模式装配，自管理 sqlite 介质，对外暴露 usageStats 命名空间的 8 个一元 Remote 方法。
 │   │   ├── settings.ts ← 服务端（Host）的插件偏好设置 schema：`usage-stats` 插件条目（cordis.patch.yml 插入的 Loader 条目，id 即 USAGE_SETTINGS_NAMESPACE）的 Config，被 harness 设置 服务（ctx.settings）投影成设置表单，偏好因此落在 profile 配置文档里、属于部署 而不是某一个浏览器。
+│   │   ├── siliconflowQuota.ts ← SiliconFlow（硅基流动）账户余额查询：端点为 `GET https://api.siliconflow.cn/v1/user/info`。
 │   │   ├── snapshot.ts ← 快照构建：把聚合缓存 UsageStore 与账本会话元数据整理成 usageStats/snapshot 的结果 value，不触碰传输层与 ctx。
 │   │   ├── store.ts ← 内存聚合缓存：由账本事件流折叠而来的派生统计，按天、会话、模型、模型×日、全量维度组织。
+│   │   ├── volcengineQuota.ts ← 火山引擎（Volcengine）账户余额查询：账单 OpenAPI `QueryBalanceAcct`。
 │   │   └── zaiQuota.ts ← Z.ai 智谱额度查询：滚动 5 小时、每周 7 天百分比与每月 Web 搜索次数，端点为 GET https://api.z.ai/api/monitor/usage/quota/limit。
 │   ├── remote/
 │   │   └── contribution.ts ← usageStats 命名空间的手写严格 Remote 贡献。

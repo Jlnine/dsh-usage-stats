@@ -7,16 +7,21 @@
  *   - DatesTab，日期，含每日趋势曲线与范围切换
  *   - SessionsTab，会话，按会话展示表格
  *   - ModelsTab，模型，按模型拆分表格（按偏好里的重定向规则归并后展示）
- *   - SettingsTab，设置，含偏好设置，涉及 Go、DeepSeek 与 Z.ai、模型统计重定向、可折叠的账本操作与页脚
+ *   - ProvidersTab，服务商，DeepSeek / Z.ai / OpenCode Go 三家额度监控与
+ *     SiliconFlow、小米 MiMo 与火山引擎余额厂商、自助添加厂商的卡片（Key 保存、
+ *     监控开关、侧边栏开关、抓取间隔），内置余额厂商在 Tab 打开时才轮询
+ *   - SettingsTab，设置，含模型统计重定向、会话徽标、可折叠的账本操作与页脚
  *
  * 数据与底部按钮共用 usageStats/snapshot、usageStats/go-quota、
- * usageStats/deepseek-balance 与 usageStats/zai-quota 的轮询结果。各 Tab 内容为条件渲染：切走即卸载，Tab 内视图状态
+ * usageStats/deepseek-balance 与 usageStats/zai-quota 的轮询结果；服务商额度由 ProvidersTab
+ * 自行按 usageStats/providerQuotas 轮询（Tab 级）。各 Tab 内容为条件渲染：切走即卸载，Tab 内视图状态
  * 含 DatesTab 的曲线范围、SessionsTab 的会话展开等，不跨切换保留，
  * 重新进入对应 Tab 即重置为默认值。
  */
 
 import {
   IconAgentPresetOutlineRegular,
+  IconArchiveOutlineRegular,
   IconCloseOutlineRegular,
   IconDataOutlineRegular,
   IconQueueOutlineRegular,
@@ -32,6 +37,7 @@ import { redirectModels } from '../stats.ts';
 import { DatesTab } from './DatesTab.tsx';
 import { ModelsTab } from './ModelsTab.tsx';
 import { OverviewTab } from './OverviewTab.tsx';
+import { ProvidersTab } from './ProvidersTab.tsx';
 import { SessionsTab } from './SessionsTab.tsx';
 import { SettingsTab } from './SettingsTab.tsx';
 import css from './UsageStatsPanel.module.css';
@@ -58,7 +64,7 @@ export interface UsageStatsPanelProps extends PropsLocale<'dsh-usage-stats'> {
   deepseek: DeepSeekBalance | null
   /** Z.ai 额度，底部按钮轮询；null 表示尚未加载或抓取被禁用。 */
   zai: ZaiQuota | null
-  /** 偏好设置，含 Go、DeepSeek、Z.ai 抓取开关、侧边栏展示与间隔，设置 Tab 读写。 */
+  /** 偏好设置，含 Go、DeepSeek、Z.ai 与服务商额度的抓取开关、侧边栏展示与间隔，设置 Tab 读写。 */
   settings: UsageSettings
   /** 局部更新偏好设置。 */
   onUpdateSettings: (patch: Partial<UsageSettings>) => void
@@ -75,7 +81,7 @@ export interface UsageStatsPanelProps extends PropsLocale<'dsh-usage-stats'> {
 }
 
 /** Tab 键：与面板内视图一一对应。 */
-type TabKey = 'overview' | 'dates' | 'sessions' | 'models' | 'settings';
+type TabKey = 'overview' | 'dates' | 'sessions' | 'models' | 'providers' | 'settings';
 
 /** Tab 定义：键 + 文案键 + 图标组件。 */
 const TABS: { key: TabKey; labelKey: UsageStatsKey; Icon: ComponentType<IconProps> }[] = [
@@ -83,6 +89,7 @@ const TABS: { key: TabKey; labelKey: UsageStatsKey; Icon: ComponentType<IconProp
   { key: 'dates', labelKey: 'tab.dates', Icon: IconRightUpOutlineRegular },
   { key: 'sessions', labelKey: 'tab.sessions', Icon: IconQueueOutlineRegular },
   { key: 'models', labelKey: 'tab.models', Icon: IconAgentPresetOutlineRegular },
+  { key: 'providers', labelKey: 'tab.providers', Icon: IconArchiveOutlineRegular },
   { key: 'settings', labelKey: 'tab.settings', Icon: IconSettingsOutlineRegular },
 ];
 
@@ -154,6 +161,19 @@ export function UsageStatsPanel({
         )}
         {active === 'models' && (
           <ModelsTab models={redirect.models} mergedSources={redirect.mergedSources} t={t} />
+        )}
+        {active === 'providers' && (
+          <ProvidersTab
+            settings={settings}
+            t={t}
+            onUpdateSettings={onUpdateSettings}
+            go={go}
+            deepseek={deepseek}
+            zai={zai}
+            onRefreshGo={onRefreshGo}
+            onRefreshDeepSeek={onRefreshDeepSeek}
+            onRefreshZai={onRefreshZai}
+          />
         )}
         {active === 'settings' && (
           <SettingsTab

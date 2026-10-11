@@ -1,0 +1,77 @@
+/* 服务商卡片内的偏好行（启用监控 / 侧边栏展示 / 抓取间隔）：
+   行间分割线、右对齐控件，风格对齐设置页的偏好分组行。
+   颜色全部使用设计 token（见 test/styles.mjs 对照表）。 */
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  cursor: pointer;
+}
+
+.row + .row {
+  border-top: 1px solid var(--dsw-alias-border-l1);
+}
+
+.rowDisabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.title {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.desc {
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.intervalInput {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+.intervalInput input {
+  width: 56px;
+  padding: 4px 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-2);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-primary);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.intervalInput input:focus {
+  outline: none;
+  border-color: var(--dsw-alias-brand-primary);
+}
+
+.intervalInput input:disabled {
+  opacity: 0.6;
+}
+
+.intervalUnit {
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-tertiary);
+  white-space: nowrap;
+}

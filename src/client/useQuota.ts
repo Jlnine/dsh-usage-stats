@@ -1,5 +1,6 @@
 /**
- * 额度轮询 hooks（浏览器端）：共享轮询骨架 useQuota + Go/DeepSeek/Z.ai 三路薄包装。
+ * 额度轮询 hooks（浏览器端）：共享轮询骨架 useQuota + Go/DeepSeek/Z.ai 三路薄包装
+ * 与聚合三家的服务商额度 useProviderQuotas。
  *
  * 共享语义（useQuota 工厂，调用方只配调用函数、夹取与 error 占位）：
  *   - enabled 为 false 时清空已拉数据、不发起任何请求；
@@ -12,15 +13,20 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { clampDeepSeekFetchMinutes, clampGoFetchMinutes, clampZaiFetchMinutes } from '../utils.ts';
+import { clampDeepSeekFetchMinutes, clampGoFetchMinutes, clampProvidersFetchMinutes, clampZaiFetchMinutes } from '../utils.ts';
 
 import { usageStatsRemote } from './remote.ts';
 
 import type {
+  CustomProviderConfig,
+  CustomProviderQuery,
   DeepSeekBalance,
   GoQuota,
   GoWindow,
+  ProviderQuotas,
+  ProviderQuotasRequest,
   QuotaRequest,
+  UsageSettings,
   ZaiQuota,
   ZaiWindow,
 } from '../types.ts';
@@ -29,6 +35,17 @@ import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol';
 /** 协议类型单一定义在 types.ts，此处仅 re-export 实际被引用的名字。 */
 export type { GoQuota, GoWindow, ZaiWindow };
 
+/** 把自定义厂商配置投影成线路查询字段（只取查询所需，仍不含密钥）。 */
+export function customProviderQueries(custom: CustomProviderConfig[]): CustomProviderQuery[] {
+  return custom.map((p) => ({
+    id: p.id,
+    endpoint: p.endpoint,
+    credentialRef: p.credentialRef,
+    valuePath: p.valuePath,
+    currency: p.currency,
+  }));
+}
+
 /** 额度轮询：返回 [数据, 手动刷新]，未启用/失败未加载时为 null。 */
 export function useQuota<T>(options: {
   enabled: boolean
@@ -36,11 +53,15 @@ export function useQuota<T>(options: {
   invoke: (request: QuotaRequest) => Promise<RemoteResult<T>>
   clampMinutes: (v: number) => number
   makeError: () => T
+  /** 合并进请求的额外字段（服务商额度的 builtinIds/providers）；按 JSON 参与 effect 依赖。 */
+  extra?: unknown
 }): [T | null, () => void] {
-  const { enabled, intervalMinutes, invoke, clampMinutes, makeError } = options;
+  const { enabled, intervalMinutes, invoke, clampMinutes, makeError, extra } = options;
   const [data, setData] = useState<T | null>(null);
   // 乱序守卫：轮询与手动强制刷新共享同一递增序号，最后发起者胜出。
   const seqRef = useRef(0);
+  // 额外字段的稳定键：内容变化才重建轮询，引用变化但内容不变不重拉。
+  const extraKey = JSON.stringify(extra ?? null);
 
   useEffect(() => {
     if (!enabled) {
@@ -50,12 +71,16 @@ export function useQuota<T>(options: {
     }
     // 防御性夹取：偏好已夹到下限，这里再兜底一次防止误用。
     const minutes = clampMinutes(intervalMinutes);
+    const extraPart = (extra !== undefined && extra !== null && typeof extra === 'object')
+      ? extra as Partial<ProviderQuotasRequest>
+      : {};
     let live = true;
     const load = async (force: boolean) => {
       const mine = ++seqRef.current;
       let parsed: { ok?: boolean; value?: T } = {};
       try {
-        const result = await invoke(force ? { intervalMinutes: minutes, force: true } : { intervalMinutes: minutes });
+        const request: ProviderQuotasRequest = { intervalMinutes: minutes, ...(force ? { force: true } : {}), ...extraPart };
+        const result = await invoke(request);
         parsed = result.ok ? { ok: true, value: result.value } : { ok: false };
       } catch {
         parsed = {};
@@ -70,17 +95,21 @@ export function useQuota<T>(options: {
     void load(false);
     const timerId = window.setInterval(() => { void load(false); }, minutes * 60 * 1000);
     return () => { live = false; window.clearInterval(timerId); };
-    // intervalMinutes 参与夹取，effect 依赖用原始值以感知变化。
-  }, [enabled, intervalMinutes, invoke, clampMinutes, makeError]);
+    // intervalMinutes 参与夹取，effect 依赖用原始值以感知变化；extraKey 代表额外请求形状。
+  }, [enabled, intervalMinutes, invoke, clampMinutes, makeError, extraKey]);
 
   /** 手动触发一次立即刷新，未启用时忽略，直接带 force 抓取。 */
   const refresh = useCallback(() => {
     if (!enabled) return;
     const minutes = clampMinutes(intervalMinutes);
+    const extraPart = (extra !== undefined && extra !== null && typeof extra === 'object')
+      ? extra as Partial<ProviderQuotasRequest>
+      : {};
     const mine = ++seqRef.current;
     void (async () => {
       try {
-        const result = await invoke({ intervalMinutes: minutes, force: true });
+        const request: ProviderQuotasRequest = { intervalMinutes: minutes, force: true, ...extraPart };
+        const result = await invoke(request);
         if (mine !== seqRef.current) return;
         if (result.ok) {
           setData(result.value);
@@ -91,7 +120,7 @@ export function useQuota<T>(options: {
         setData((prev) => prev ?? makeError());
       }
     })();
-  }, [enabled, intervalMinutes, invoke, clampMinutes, makeError]);
+  }, [enabled, intervalMinutes, invoke, clampMinutes, makeError, extraKey]);
 
   return [data, refresh];
 }
@@ -174,4 +203,66 @@ export function useZaiQuota(
   intervalMinutes: number,
 ): [ZaiQuota | null, () => void] {
   return useQuota({ enabled, intervalMinutes, invoke: invokeZaiQuota, clampMinutes: clampZaiFetchMinutes, makeError: makeZaiError });
+}
+
+/**
+ * 服务商额度：内置三家（SiliconFlow / 小米 MiMo / 火山引擎）+ 用户自助添加的
+ * Bearer 余额厂商，服务端 usageStats/providerQuotas 一次聚合返回，TTL 缓存。
+ * 服务商页在 Tab 打开时按「启用的内置家 + 全部自定义」轮询；侧边栏只轮询
+ * 「勾选侧边栏」的子集（内置与自定义各自子集，不白拉没勾选的家）。
+ * 两种范围服务端按形状分桶缓存互不串味。
+ */
+
+/** 服务商额度调用（模块级稳定引用）。 */
+function invokeProviderQuotas(request: QuotaRequest): Promise<RemoteResult<ProviderQuotas>> {
+  return usageStatsRemote().providerQuotas(request as ProviderQuotasRequest);
+}
+
+/** 首屏失败时的 error 占位：保证服务商页可见（模块级稳定引用）。 */
+function makeProviderError(): ProviderQuotas {
+  return { status: 'error', fetchedAt: Date.now(), providers: [] };
+}
+
+/** 服务商页：查哪些内置家由 builtinIds 控制，自定义列表按配置投影。 */
+export function useProviderQuotas(
+  enabled: boolean,
+  intervalMinutes: number,
+  builtinIds: string[],
+  custom: CustomProviderConfig[],
+): [ProviderQuotas | null, () => void] {
+  return useQuota({
+    enabled,
+    intervalMinutes,
+    invoke: invokeProviderQuotas,
+    clampMinutes: clampProvidersFetchMinutes,
+    makeError: makeProviderError,
+    extra: { builtinIds, providers: customProviderQueries(custom) },
+  });
+}
+
+/**
+ * 侧边栏底部：只轮询「启用监控且勾选侧边栏」的服务商（内置与自定义各自的子集）。
+ * 间隔取这些家里最小的抓取间隔（保证最勤的那家不过期）；没有可见家时不请求。
+ */
+export function useSidebarProviderQuotas(
+  settings: UsageSettings,
+): [ProviderQuotas | null, () => void] {
+  const visibleBuiltins = settings.builtinProviders.filter((p) => p.enabled && p.showInSidebar);
+  const visibleCustom = settings.customProviders.filter((p) => p.enabled && p.showInSidebar);
+  const enabled = visibleBuiltins.length > 0 || visibleCustom.length > 0;
+  const intervalMinutes = [...visibleBuiltins, ...visibleCustom].reduce(
+    (min, p) => Math.min(min, clampProvidersFetchMinutes(p.fetchMinutes)),
+    clampProvidersFetchMinutes(NaN),
+  );
+  return useQuota({
+    enabled,
+    intervalMinutes,
+    invoke: invokeProviderQuotas,
+    clampMinutes: clampProvidersFetchMinutes,
+    makeError: makeProviderError,
+    extra: {
+      builtinIds: visibleBuiltins.map((p) => p.id),
+      providers: customProviderQueries(visibleCustom),
+    },
+  });
 }

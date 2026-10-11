@@ -1,0 +1,323 @@
+/* 服务商 Tab ProvidersTab：SiliconFlow / 小米 MiMo / 火山引擎 额度卡片列表。颜色全部使用设计 token。 */
+/* .section* / .goHint 等跨组件基元见 UsageStatsCommon.module.css。 */
+
+/* ---- 卡片列表：一家一张卡，纵向堆叠 ---- */
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-2);
+  box-shadow: var(--dsw-shadow-lv1);
+}
+
+.cardHead {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.name {
+  flex: none;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+  color: var(--dsw-alias-label-primary);
+  white-space: nowrap;
+}
+
+/* 套餐名徽标：如 MiMo 套餐名，未知时不渲染 */
+.plan {
+  min-width: 0;
+  font-size: 10px;
+  line-height: 14px;
+  color: var(--dsw-alias-label-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 标题行右侧立即刷新按钮 */
+.refresh {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.refresh:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.refresh:active svg {
+  transform: rotate(180deg);
+}
+
+.refresh:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.refresh:disabled:hover {
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* ---- 金额类明细（余额型服务商） ---- */
+.amounts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.amountBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.amountMain {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.amountCurrency {
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+  white-space: nowrap;
+}
+
+.amountTotal {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 18px;
+  color: var(--dsw-alias-label-primary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.amountDetails {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-top: 3px;
+  border-top: 1px dashed var(--dsw-alias-border-l1);
+}
+
+.amountDetailRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.amountDetailLabel {
+  white-space: nowrap;
+}
+
+.amountDetailValue {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ---- 百分比窗口（套餐额度型服务商） ---- */
+.windows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.windowRow {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.windowTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.windowLabel {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bar {
+  flex: none;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  overflow: hidden;
+}
+
+.barFill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--dsw-alias-state-success-primary, #34c759);
+}
+
+.fillWarn {
+  background: var(--dsw-alias-state-warn-primary, #f5a623);
+}
+
+.fillOver {
+  background: var(--dsw-alias-state-error-primary, #e5484d);
+}
+
+.pct {
+  flex: none;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-primary);
+}
+
+.pctWarn {
+  color: var(--dsw-alias-state-warn-primary, #b45309);
+}
+
+.pctOver {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.windowReset {
+  min-width: 0;
+  font-size: 10px;
+  line-height: 12px;
+  color: var(--dsw-alias-label-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- 卡片底部更新时间 ---- */
+.fetchedAt {
+  margin-top: auto;
+  padding-top: 6px;
+  border-top: 1px solid var(--dsw-alias-border-l1);
+  font-size: 10px;
+  line-height: 14px;
+  color: var(--dsw-alias-label-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- 分组小标题：内置三家 / 我添加的 ---- */
+.groupLabel {
+  margin: 12px 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 14px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* ---- 自定义卡片底部：变量名 + 编辑/删除 ---- */
+.cardActions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.keyRef {
+  min-width: 0;
+  font-size: 10px;
+  line-height: 14px;
+  color: var(--dsw-alias-label-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cardBtns {
+  flex: none;
+  display: inline-flex;
+  gap: 10px;
+}
+
+.linkBtn,
+.linkBtnDanger {
+  padding: 0;
+  border: none;
+  background: transparent;
+  font-size: 11px;
+  line-height: 14px;
+  cursor: pointer;
+}
+
+.linkBtn {
+  color: var(--dsw-alias-brand-primary, var(--dsw-alias-label-secondary));
+}
+
+.linkBtn:hover {
+  text-decoration: underline;
+}
+
+.linkBtnDanger {
+  color: var(--dsw-alias-state-error-primary, #e5484d);
+}
+
+.linkBtnDanger:hover {
+  text-decoration: underline;
+}
+
+/* ---- 底部「添加服务商」按钮 ---- */
+.addBtn {
+  width: 100%;
+  margin-top: 10px;
+  padding: 8px 0;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+  background: transparent;
+  border: 1px dashed var(--dsw-alias-border-l2);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.addBtn:hover:not(:disabled) {
+  color: var(--dsw-alias-label-primary);
+  border-color: var(--dsw-alias-brand-primary, var(--dsw-alias-border-l3));
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.addBtn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}

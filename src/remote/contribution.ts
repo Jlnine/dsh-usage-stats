@@ -20,10 +20,18 @@ import { z } from 'zod';
 
 import type {
   ClearResult,
+  CustomProviderConfig,
+  CustomProviderQuery,
   DeepSeekBalance,
+  DescribeCredentialRequest,
+  DescribeCredentialResult,
   GoQuota,
+  ProviderQuotas,
+  ProviderQuotasRequest,
   QuotaRequest,
   RebuildResult,
+  SaveCredentialRequest,
+  SaveCredentialResult,
   SealResult,
   SnapshotRequest,
   UsageSnapshot,
@@ -145,6 +153,32 @@ const zaiQuotaSchema = z.object({
   }).nullable(),
 });
 
+const providerQuotaEntrySchema = z.object({
+  // 内置三家为固定 id，自助添加的 Bearer 厂商为 custom-<id>，故放宽为任意字符串。
+  id: z.string(),
+  status: z.union([z.literal('ok'), z.literal('no-key'), z.literal('error')]),
+  fetchedAt: z.number(),
+  plan: z.string().nullable(),
+  amounts: z.array(z.object({
+    currency: z.string(),
+    total: z.number().nullable(),
+    granted: z.number().nullable(),
+    toppedUp: z.number().nullable(),
+  })),
+  windows: z.array(z.object({
+    kind: z.union([z.literal('plan'), z.literal('month')]),
+    percent: z.number(),
+    resetsAt: z.string().nullable(),
+  })),
+  error: z.string().nullable(),
+});
+
+const providerQuotasSchema = z.object({
+  status: z.union([z.literal('ok'), z.literal('error')]),
+  fetchedAt: z.number(),
+  providers: z.array(providerQuotaEntrySchema),
+});
+
 const snapshotRequestSchema = z.object({
   sessionId: z.string().nullable(),
   limit: z.number().optional(),
@@ -153,6 +187,38 @@ const snapshotRequestSchema = z.object({
 const quotaRequestSchema = z.object({
   intervalMinutes: z.number().optional(),
   force: z.boolean().optional(),
+});
+
+/** 单个自定义 Bearer 厂商的线路查询定义（不含密钥值）。 */
+const customProviderQuerySchema = z.object({
+  id: z.string(),
+  endpoint: z.string(),
+  credentialRef: z.string(),
+  valuePath: z.string(),
+  currency: z.string(),
+});
+
+/** providerQuotas 请求：在间隔/强刷之外控制查询范围（选中的内置家 + 自定义子集）。 */
+const providerQuotasRequestSchema = z.object({
+  intervalMinutes: z.number().optional(),
+  force: z.boolean().optional(),
+  builtinIds: z.array(z.string()).max(3).optional(),
+  providers: z.array(customProviderQuerySchema).max(30).optional(),
+});
+
+/** 凭据探测/保存请求：环境变量名 + （仅保存）明文 Key。 */
+const describeCredentialRequestSchema = z.object({ ref: z.string() });
+const saveCredentialRequestSchema = z.object({ ref: z.string(), value: z.string().max(4096) });
+
+const describeCredentialResultSchema = z.object({
+  ref: z.string(),
+  configured: z.boolean(),
+  writable: z.boolean(),
+});
+
+const saveCredentialResultSchema = z.object({
+  saved: z.literal(true),
+  ref: z.string(),
 });
 
 const rebuildResultSchema = z.object({ rebuilt: z.boolean(), foldedEvents: z.number() });
@@ -205,7 +271,7 @@ function requestParam(typeSymbol: string, schema: z.ZodTypeAny): {
   return { name: 'request', wire: 'request', source: 'json', codec: strictCodec(typeSymbol, schema) };
 }
 
-/** 可挂载的严格贡献：7 个一元方法，无 lookup、无取消。 */
+/** 可挂载的严格贡献：8 个一元方法，无 lookup、无取消。 */
 export const USAGE_STATS_REMOTE: TypertRemoteContribution = {
   package: PACKAGE,
   descriptors: [
@@ -272,6 +338,33 @@ export const USAGE_STATS_REMOTE: TypertRemoteContribution = {
       parameters: [requestParam(`${PACKAGE}/types#QuotaRequest`, quotaRequestSchema)],
       result: strictCodec(`${PACKAGE}/types#ZaiQuota`, envelope(zaiQuotaSchema)),
     },
+    {
+      id: `${PACKAGE}#${NAMESPACE}/providerQuotas`,
+      service: NAMESPACE,
+      namespace: NAMESPACE,
+      method: 'providerQuotas',
+      invocation: { kind: 'direct' },
+      parameters: [requestParam(`${PACKAGE}/types#ProviderQuotasRequest`, providerQuotasRequestSchema)],
+      result: strictCodec(`${PACKAGE}/types#ProviderQuotas`, envelope(providerQuotasSchema)),
+    },
+    {
+      id: `${PACKAGE}#${NAMESPACE}/describeCredential`,
+      service: NAMESPACE,
+      namespace: NAMESPACE,
+      method: 'describeCredential',
+      invocation: { kind: 'direct' },
+      parameters: [requestParam(`${PACKAGE}/types#DescribeCredentialRequest`, describeCredentialRequestSchema)],
+      result: strictCodec(`${PACKAGE}/types#DescribeCredentialResult`, envelope(describeCredentialResultSchema)),
+    },
+    {
+      id: `${PACKAGE}#${NAMESPACE}/saveCredential`,
+      service: NAMESPACE,
+      namespace: NAMESPACE,
+      method: 'saveCredential',
+      invocation: { kind: 'direct' },
+      parameters: [requestParam(`${PACKAGE}/types#SaveCredentialRequest`, saveCredentialRequestSchema)],
+      result: strictCodec(`${PACKAGE}/types#SaveCredentialResult`, envelope(saveCredentialResultSchema)),
+    },
   ],
 };
 
@@ -284,6 +377,9 @@ export const METHOD_NAMES = [
   'goQuota',
   'deepseekBalance',
   'zaiQuota',
+  'providerQuotas',
+  'describeCredential',
+  'saveCredential',
 ] as const;
 
 /** Client 类型合并：引入本模块即挂上 ctx.remote.usageStats 的完整签名。 */
@@ -296,6 +392,9 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     goQuota: (request: QuotaRequest) => Promise<RemoteResult<GoQuota>>
     deepseekBalance: (request: QuotaRequest) => Promise<RemoteResult<DeepSeekBalance>>
     zaiQuota: (request: QuotaRequest) => Promise<RemoteResult<ZaiQuota>>
+    providerQuotas: (request: ProviderQuotasRequest) => Promise<RemoteResult<ProviderQuotas>>
+    describeCredential: (request: DescribeCredentialRequest) => Promise<RemoteResult<DescribeCredentialResult>>
+    saveCredential: (request: SaveCredentialRequest) => Promise<RemoteResult<SaveCredentialResult>>
   }
   interface TypertRemoteMap {
     'usageStats/snapshot': (request: SnapshotRequest) => Promise<RemoteResult<UsageSnapshot>>
@@ -305,6 +404,9 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     'usageStats/goQuota': (request: QuotaRequest) => Promise<RemoteResult<GoQuota>>
     'usageStats/deepseekBalance': (request: QuotaRequest) => Promise<RemoteResult<DeepSeekBalance>>
     'usageStats/zaiQuota': (request: QuotaRequest) => Promise<RemoteResult<ZaiQuota>>
+    'usageStats/providerQuotas': (request: ProviderQuotasRequest) => Promise<RemoteResult<ProviderQuotas>>
+    'usageStats/describeCredential': (request: DescribeCredentialRequest) => Promise<RemoteResult<DescribeCredentialResult>>
+    'usageStats/saveCredential': (request: SaveCredentialRequest) => Promise<RemoteResult<SaveCredentialResult>>
   }
   interface TypertRemoteNamespaceMap {
     'usageStats': TypertRemoteNamespace$75736167655374617473
@@ -314,10 +416,18 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
 /** 静态类型 re-export：Client 以 import type 引入本模块即激活命名空间合并。 */
 export type {
   ClearResult,
+  CustomProviderConfig,
+  CustomProviderQuery,
   DeepSeekBalance,
+  DescribeCredentialRequest,
+  DescribeCredentialResult,
   GoQuota,
+  ProviderQuotas,
+  ProviderQuotasRequest,
   QuotaRequest,
   RebuildResult,
+  SaveCredentialRequest,
+  SaveCredentialResult,
   SealResult,
   SnapshotRequest,
   UsageSnapshot,

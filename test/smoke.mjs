@@ -2,7 +2,7 @@
  * 用量统计服务端 Remote 方法的独立冒烟测试（账本模式，自管理 sqlite 介质）。
  *
  * 以真实 cordis Context 挂载 UsageStatsService（存储不 mock：账本直接写
- * node:sqlite 文件），直接调用 7 个 @Remote 方法，验证：
+ * node:sqlite 文件），直接调用 8 个 @Remote 方法，验证：
  *   - 首启初始化：账本 sqlite 文件落盘（$DSH_HOME/storages/
  *     dsh-usage-stats/ledger.sqlite），快照从聚合缓存读出；
  *   - 绝对基线：快照 foldedEvents 锚定 fixture 的 394 条可折叠
@@ -11,7 +11,7 @@
  *     SRC 线路字段（产物方法源码参数名）与贡献 wire 名逐个对齐——生产构建压缩
  *     方法签名会让新版网关拒收全部带参请求，此处立即失败；
  *   - rebuild 并发返回 usageStats/busy，clear/seal 语义正确；
- *   - 三路额度在凭据中心缺席时确定性 no-key，不产生任何真实外网请求；
+ *   - 四路额度在凭据中心缺席时确定性 no-key，不产生任何真实外网请求；
  *   - 重启恢复：重开同一 sqlite 文件、会话清单返回空，仍能从介质重建统计
  *     （不依赖重扫日志）；
  *   - 旧代次会话兼容：harness 两路以 SessionFormatUnsupportedError 拒绝时，raw 兜底
@@ -140,9 +140,9 @@ async function mount(query, persist, options = {}) {
       await new Promise((r) => setTimeout(r, 50))
     }
   }
-  // 7 个 @Remote 标记全部存活：网关 SRC 分发的前提。
+  // 8 个 @Remote 标记全部存活：网关 SRC 分发的前提。
   const markers = remoteMethods(svc).map((m) => m.exportName ?? m.method)
-  for (const name of ['snapshot', 'rebuild', 'clear', 'seal', 'goQuota', 'deepseekBalance', 'zaiQuota']) {
+  for (const name of ['snapshot', 'rebuild', 'clear', 'seal', 'goQuota', 'deepseekBalance', 'zaiQuota', 'providerQuotas']) {
     if (!markers.includes(name)) {
       console.error(`FAIL: 缺 @Remote 标记 ${name}`)
       process.exit(1)
@@ -314,7 +314,7 @@ if (snap3.foldedEvents !== EXPECTED_FOLDED) {
   process.exit(1)
 }
 
-// 三路额度：凭据中心缺席 → 确定性 no-key，不出网；interval/force 语义一致
+// 四路额度：凭据中心缺席 → 确定性 no-key，不出网；interval/force 语义一致
 const go = await svc.goQuota({})
 assertEnvelope('goQuota', go)
 console.log('go-quota ok:', go.status === 'no-key')
@@ -356,6 +356,38 @@ assertEnvelope('zaiQuota', zai)
 console.log('zai-quota ok:', zai.status === 'no-key')
 if (zai.status !== 'no-key') {
   console.error('FAIL: unexpected zai-quota response (expected no-key)')
+  process.exit(1)
+}
+
+// 服务商额度：一次聚合选中内置三家，凭据缺席时每家确定性 no-key，不出网
+const pq = await svc.providerQuotas({ builtinIds: ['siliconflow', 'xiaomi-mimo', 'volcengine'] })
+assertEnvelope('providerQuotas', pq)
+console.log('provider-quotas ok:', pq.status === 'ok', '| providers:', pq.providers.map((p) => `${p.id}:${p.status}`).join(','))
+if (pq.status !== 'ok' || pq.providers.length !== 3) {
+  console.error('FAIL: unexpected provider-quotas response shape')
+  process.exit(1)
+}
+for (const entry of pq.providers) {
+  if (entry.status !== 'no-key') {
+    console.error(`FAIL: unexpected provider ${entry.id} status (expected no-key)`)
+    process.exit(1)
+  }
+}
+// 子集查询：只查传入选中的家，白名单外的 id 被丢弃
+const pqSubset = await svc.providerQuotas({ force: true, builtinIds: ['siliconflow', 'not-a-provider'] })
+if (pqSubset.status !== 'ok' || pqSubset.providers.length !== 1 || pqSubset.providers[0].id !== 'siliconflow') {
+  console.error('FAIL: unexpected provider-quotas subset response')
+  process.exit(1)
+}
+// 不带内置与自定义：空聚合但仍是 ok，不白拉任何官方端点
+const pqEmpty = await svc.providerQuotas({})
+if (pqEmpty.status !== 'ok' || pqEmpty.providers.length !== 0) {
+  console.error('FAIL: unexpected empty provider-quotas response')
+  process.exit(1)
+}
+const pq2 = await svc.providerQuotas({ intervalMinutes: 3, force: true, builtinIds: ['siliconflow', 'xiaomi-mimo', 'volcengine'] })
+if (pq2.status !== 'ok' || pq2.providers.length !== 3) {
+  console.error('FAIL: unexpected provider-quotas response with force (expected ok)')
   process.exit(1)
 }
 

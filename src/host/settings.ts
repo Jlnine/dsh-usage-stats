@@ -30,6 +30,7 @@ import {
   diffFromDefaults,
   GO_FETCH_DEFAULT_MINUTES,
   normalizeUsageSettings,
+  PROVIDERS_FETCH_DEFAULT_MINUTES,
   USAGE_SETTINGS_DEFAULTS,
   USAGE_SETTINGS_NAMESPACE,
   ZAI_FETCH_DEFAULT_MINUTES,
@@ -64,12 +65,33 @@ export const UsageSettingsSchema = Schema.object({
   zaiEnabled: Schema.boolean().default(USAGE_SETTINGS_DEFAULTS.zaiEnabled).volatile(),
   showZaiInSidebar: Schema.boolean().default(USAGE_SETTINGS_DEFAULTS.showZaiInSidebar).volatile(),
   zaiFetchMinutes: Schema.number().default(ZAI_FETCH_DEFAULT_MINUTES).volatile(),
+  // 内置三家（SiliconFlow / 小米 MiMo / 火山引擎）的按家偏好：密钥值在凭据中心，
+  // 这里只有 id 与开关/间隔；嵌套 object 各字段带默认值，手改文档漏字段时按默认解析。
+  builtinProviders: Schema.array(Schema.object({
+    id: Schema.string().default(''),
+    enabled: Schema.boolean().default(true),
+    showInSidebar: Schema.boolean().default(false),
+    fetchMinutes: Schema.number().default(PROVIDERS_FETCH_DEFAULT_MINUTES),
+  })).default(USAGE_SETTINGS_DEFAULTS.builtinProviders).volatile(),
   showSessionId: Schema.boolean().default(USAGE_SETTINGS_DEFAULTS.showSessionId).volatile(),
   modelRedirects: Schema.array(Schema.object({
     fromProvider: Schema.string().default(''),
     fromModel: Schema.string().default(''),
     toProvider: Schema.string().default(''),
     toModel: Schema.string().default(''),
+  })).default([]).volatile(),
+  // 自助 Bearer 余额厂商：只存凭据变量名引用与查询定义，密钥值在凭据中心、不在此文档。
+  // 嵌套 object 同 modelRedirects 一样各字段带默认值，手改文档漏字段时按默认解析而非整段失效。
+  customProviders: Schema.array(Schema.object({
+    id: Schema.string().default(''),
+    label: Schema.string().default(''),
+    endpoint: Schema.string().default(''),
+    credentialRef: Schema.string().default(''),
+    valuePath: Schema.string().default('data.balance'),
+    currency: Schema.string().default('CNY'),
+    enabled: Schema.boolean().default(true),
+    showInSidebar: Schema.boolean().default(false),
+    fetchMinutes: Schema.number().default(PROVIDERS_FETCH_DEFAULT_MINUTES),
   })).default([]).volatile(),
 });
 
@@ -158,7 +180,7 @@ export function recoverLegacyUsageSettings(ctx: Context): void {
       ctx.logger?.info('usage-stats: 已从 %s 回收旧版偏好（%s）', imported, fields.join(', '));
     };
     void run().catch((error: unknown) => {
-      ctx.logger?.warn('usage-stats: 旧版偏好回收失败（偏好保持默认值，可在设置页重设）');
+      ctx.logger?.warn('usage-stats: 旧版偏好回收失败（偏好保持默认值，可在插件界面重设）');
       ctx.logger?.warn(error);
     });
   });

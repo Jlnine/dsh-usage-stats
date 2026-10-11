@@ -7,20 +7,22 @@
 
 ## 1. 通用约定
 
-- 命名空间 `usageStats`，7 个一元（unary，一问一答，区别于流式）方法：
-  `snapshot/rebuild/clear/seal/goQuota/deepseekBalance/zaiQuota`；其中
+- 命名空间 `usageStats`，10 个一元（unary，一问一答，区别于流式）方法：
+  `snapshot/rebuild/clear/seal/goQuota/deepseekBalance/zaiQuota/providerQuotas/describeCredential/saveCredential`；其中
   `rebuild`/`clear`/`seal` **无请求参数**（贡献里 `parameters: []`），其余各带一个具名 request。
   调用经 `ctx.get('remote.usageStats')` 取命名空间服务后调用（本仓库由 `usageStatsRemote()` 封装）；
   线路上走客户端 Connection 的 RPC：`POST /api/usageStats/<方法>`，请求体为
   `{ type:'client-request', rpcId, method, payload:{ args } }`，信任与认证由网关载体统一处理（Host/Origin 围栏 + 浏览器会话 cookie）。禁止暂存 `ctx.remote` 再读 `.usageStats`。
 - 成功响应 `{ ok: true, value }`；失败 `{ ok: false, error: { code, message, details } }`；
-  业务失败码为 `usageStats/busy`（写操作并发，见 §4），未归类异常由网关折为 `gateway/internal`。
+  业务失败码为 `usageStats/busy`（写操作并发，见 §4）、`usageStats/bad-request`
+  （凭据变量名/请求形状非法、写入被凭据服务拒绝，见 §3.5/§3.6）与
+  `usageStats/credentials-unavailable`（凭据中心不可写），未归类异常由网关折为 `gateway/internal`。
 - Host 侧走 @Remote 装饰器标记 + 实时服务绑定的 SRC 分发（与 dev 模式同源），
   Client 侧挂载手写严格贡献（独立仓库跑不了 harness 生成器管线，见
   `src/remote/contribution.ts` 头注释）；只改实现体不动贡献，改签名必须同步。
 - **参数名即线路字段名**：SRC 分发下网关从服务端方法源码文本
   （`Function.prototype.toString`）读参数名，作为请求 `args` 的字段名；带参方法的参数名
-  必须与贡献里的 `wire` 逐字相同（本仓库四个带参方法均为 `request`），改名即改协议。
+  必须与贡献里的 `wire` 逐字相同（本仓库五个带参方法均为 `request`），改名即改协议。
   服务端产物因此不做压缩（见 `docs/ARCHITECTURE.md` §6），
   `test/smoke.mjs` 的「SRC 线路字段」自检逐方法对齐两侧。
 
@@ -37,9 +39,9 @@
   - `models[]` 按模型拆分，元素含 `provider`、`model`、`calls`、`usage`、`series`，`series` 为该模型按日 `SeriesPoint[]`，供浏览器端范围筛选与堆叠柱使用，旧快照可能缺省；
   - `sessionsList[]` 为会话明细，按 `lastActive` 倒序，已分页截断，每项含 `id`、`title`、`cwd`、`createdAt`、`lastActive`、`calls`、`usage`、`parentSession`、`origin`、`delegationDepth`，后三者为子代理归属，序列化为 `string|null`、`string|null`、`number`。
 
-## 3. 额度查询通用约定（goQuota / deepseekBalance / zaiQuota 共用）
+## 3. 额度查询通用约定（goQuota / deepseekBalance / zaiQuota / providerQuotas 共用）
 
-三路额度方法共享同一请求形态与缓存语义，各节只写差异（键名、端点、归一化、状态特例）。
+四路额度方法共享同一请求形态与缓存语义，各节只写差异（键名、端点、归一化、状态特例）。
 
 - body `{ intervalMinutes?: number, force?: boolean }` —— `intervalMinutes` 是客户端
   抓取间隔（分钟，来自偏好设置），服务端据此调整 TTL；`force: true` 对应概览磁贴的
@@ -108,6 +110,69 @@
 - 特例：`success:false` 且 `msg` 含 `"coding plan"`（如「当前用户不存在coding plan」）
   → `no-plan`（合法 key 但无 GLM Coding Plan，前端展示「未开通 GLM Coding Plan」空态）。
 
+## 3.4 usageStats/providerQuotas
+
+- 目的：一次聚合**选定范围**的服务商余额/套餐额度——内置三家（SiliconFlow、小米 MiMo、
+  火山引擎）与用户在「服务商」页自助添加的 Bearer 余额厂商，供「服务商」页与侧边栏展示。
+- request（在 §3 通用字段之外）：`{ builtinIds?: string[], providers?: CustomProviderQuery[] }`。
+  `builtinIds` 是本轮要查的内置家（`BUILTIN_PROVIDER_IDS` 子集，白名单外的 id 被丢弃）；
+  `providers` 是自定义厂商查询定义（由偏好投影，只含查询字段、不含密钥值，上限 30）。
+  两个字段都参与服务端缓存分桶：服务商页查「启用监控的内置家 + 全部启用的自定义」，
+  侧边栏只查「启用监控且勾选侧边栏」的子集（内置与自定义各自的子集），两种形状互不串缓存；
+  都为空时返回空聚合（不白拉任何官方端点）。服务商页在 Tab 挂载期间轮询（Tab 级，切走即停），
+  侧边栏按上述子集单独轮询。
+- 响应 `value`：`ProviderQuotas` 定义在 `src/types.ts`，结构为
+  `{ status: 'ok' | 'error', fetchedAt, providers: ProviderQuotaEntry[] }`。
+  聚合层恒为 `ok`（逐家失败不拖垮整体，由各家 `status` 承载），`providers` 顺序为
+  「内置家按 `PROVIDER_FETCHERS` 顺序（siliconflow → xiaomi-mimo → volcengine，仅含选中的）
+  在前，自定义厂商按请求顺序在后」。
+- `ProviderQuotaEntry`：`{ id, status: 'ok' | 'no-key' | 'error', fetchedAt, plan,
+  amounts: ProviderQuotaAmount[], windows: ProviderQuotaWindow[], error }`。
+  金额型用 `amounts`（`{ currency, total, granted, toppedUp }`，未知字段为 `null`），
+  百分比型用 `windows`（`{ kind: 'plan' | 'month', percent, resetsAt }`，`percent` 已归一到
+  0..100）；`error` 仅 `status='error'` 时带原因（官方错误码或 HTTP 状态），未配凭据为 `no-key`。
+- 各家差异：
+  - **SiliconFlow**：key `SILICONFLOW_API_KEY`（Bearer）；端点
+    `GET https://api.siliconflow.cn/v1/user/info`；`data.totalBalance` 为总额（缺失回退
+    `data.balance`）、`data.balance` 为赠送、`data.chargeBalance` 为充值，币种 `CNY`。
+  - **小米 MiMo**：端点 `GET https://platform.xiaomimimo.com/api/v1/tokenPlan/usage`，
+    **官方未文档化**（社区实现口径）。鉴权先以 `XIAOMI_MIMO_API_KEY` 走 Bearer，
+    官方对 API Key 常返回 401/403，此时回退浏览器 Cookie `XIAOMI_TOKEN_PLAN_CN` →
+    `XIAOMI_MIMO_COOKIE`（原样 Cookie 串）；两类凭据都缺 → `no-key`。响应按社区形状解析：
+    `data.usage.percent`（套餐，`plan`）与 `data.monthUsage.percent`（本月，`month`），
+    0..1 小数归一为 0..100（>1 视作已是百分比，夹 0..100 保留一位小数）；
+    两个窗口都取不到 → `error`。
+  - **火山引擎**：AK/SK 签名（非 Bearer），凭据 `VOLCENGINE_ACCESS_KEY_ID` +
+    `VOLCENGINE_SECRET_ACCESS_KEY`，缺任一 → `no-key`；请求
+    `POST https://billing.volcengineapi.com/?Action=QueryBalanceAcct&Version=2022-01-01`（空 body），
+    签名算法为**火山签名 V4**（规范请求 → StringToSign → 派生密钥链 date/region/service/request
+    → HMAC-SHA256，`Authorization: HMAC-SHA256 Credential=..., SignedHeaders=..., Signature=...`；
+    region `cn-north-1`、service `billing`）。`Result.AvailableBalance` 为可用余额（total）、
+    `CreditLimit` 为信用额度（granted）、`CashBalance` 为现金（toppedUp），币种 `CNY`；
+    `ResponseMetadata.Error` 在场时按官方码/消息返回 `error`（不伪装成 `no-key`）。
+- 未接入：ModelScope、商汤 sensenova 无公开的余额/额度查询接口，不在此方法内。
+
+## 3.5 usageStats/describeCredential
+
+- 目的：「服务商」页卡片与添加/编辑表单在保存 Key 前探测该环境变量名当前是否已配置、
+  凭据中心是否可写；**只回布尔状态，绝不回传密钥值**。
+- request `{ ref: string }`；`ref` 须匹配 `CREDENTIAL_REF_PATTERN`（POSIX shell 标识符），
+  非法即 `usageStats/bad-request`。
+- 响应 `{ ref, configured: boolean, writable: boolean }`：`configured` 为该名能否从
+  凭据中心（env / 凭据文件 / .env 任一层）解析到非空值；`writable` 为运行时凭据服务是否
+  暴露 `write`（本地凭据实现恒为 true，只读/缺席部署为 false）。
+
+## 3.6 usageStats/saveCredential
+
+- 目的：「服务商」页把用户填入的 API Key 写进 DSH 凭据中心（`~/.dsh/.credentials.yaml`，
+  0600、文件锁、写完热更新），**不进偏好文档、日志与返回值**。
+- request `{ ref: string, value: string }`：`value` 为密钥明文，仅在本次请求内出现，
+  长度上限 4096（`CREDENTIAL_VALUE_MAX_LENGTH`）。
+- 响应 `{ saved: true, ref }`；`ref` 非法或 `value` 为空/超长 → `usageStats/bad-request`；
+  凭据中心不可写 → `usageStats/credentials-unavailable`；写入被凭据服务拒绝（如该名被
+  启动环境只读占用，`assertUnshadowed`）→ `usageStats/bad-request` 并透传可读原因。
+- 边界：本方法只写凭据；删除「服务商」页的厂商卡片**不删**凭据中心里的 Key。
+
 ## 4. usageStats/rebuild
 
 - 清空账本全部九表（表清单见 `docs/ARCHITECTURE.md` §2）、复位聚合缓存 → 全量重扫
@@ -155,11 +220,17 @@
   | `goEnabled` / `deepseekEnabled` / `zaiEnabled` | `true` | 关闭即**不再轮询**对应额度/余额，侧边栏与模态窗均不显示 |
   | `showGoInSidebar` / `showDeepSeekInSidebar` / `showZaiInSidebar` | `true` | 只门控侧边栏底部芯片（含宽列与 rail），模态窗内详情仍可见 |
   | `goFetchMinutes` / `deepseekFetchMinutes` / `zaiFetchMinutes` | `5`（下限 3） | 抓取间隔，作为对应请求的 `intervalMinutes`，服务端据此调整 TTL |
+  | `builtinProviders` | 三家默认（全启用、不上侧边栏、`5`） | 内置余额厂商（SiliconFlow / 小米 MiMo / 火山引擎）的按家开关与间隔：`{ id, enabled, showInSidebar, fetchMinutes }[]`，归一化恒产出固定三家、顺序与 `BUILTIN_PROVIDER_IDS` 一致 |
+  | `customProviders` | `[]` | 自助添加的 Bearer 余额厂商（`CustomProviderConfig[]`，只存凭据变量名引用与查询定义、**不含密钥值**，上限 30），每家的启用/侧边栏/间隔同样在「服务商」页卡片里改 |
   | `showSessionId` | `true` | 会话标题右侧 session-id 徽标开关：关闭后 `conversation.session.header.utilities` 的徽标 entry 渲染空 |
   | `modelRedirects` | `[]` | 模型统计重定向规则表，见下 |
 
-  三组独立联动：关闭 `*Enabled` 时对应「侧边栏展示」与「抓取间隔」一并置灰。偏好不落
-  账本（账本只记用量），额度轮询间隔取自偏好。
+  各服务商的开关与间隔在「服务商」页卡片里改（DeepSeek / Z.ai / OpenCode Go 与内置三家
+  一家一卡，自助添加的厂商卡片同样内嵌三项）；关闭某家 `enabled` 时该家的「侧边栏展示」
+  与「抓取间隔」一并置灰。旧版共享开关 `providersEnabled` / `providersFetchMinutes`
+  已由 `builtinProviders` 取代：归一化时若旧字段仍在配置文档里，其值灌进三家的初始值
+  （各家已有取值时以各家为准），保证升级不丢用户选择。偏好不落账本（账本只记用量），
+  额度轮询间隔取自偏好。
 - **模型统计重定向**（浏览器端归并，服务端快照保持原始行）：
   - 归并只在「模型」页消费（`src/client/stats.ts` 的 `redirectModels`）；服务端不归并，
     设置页才能拿原始「供应商 + 模型」当规则候选。

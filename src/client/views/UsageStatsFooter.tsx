@@ -1,20 +1,24 @@
 /**
  * 用量统计的侧边栏底部动作：渲染在 `sidebar.footer.action` 列表插槽设置按钮上方的今日统计触发器。
  *
- * 合一按钮，宽列与折叠 rail 共用，侧边栏排序自上而下为 Z.ai 额度、Go 额度、DeepSeek 余额、今日用量，
- * 全部在同一按钮内，任意位置点击均打开模态窗详情 {@link UsageStatsPanel}。
+ * 合一按钮，宽列与折叠 rail 共用，侧边栏排序自上而下为 Z.ai 额度、Go 额度、DeepSeek 余额、
+ * 勾选侧边栏的各服务商额度、今日用量，全部在同一按钮内，任意位置点击均打开模态窗详情
+ * {@link UsageStatsPanel}。
  *
  * 宽列：按钮内纵向多行——
  *   1) 带"Z.ai 额度"标签的 Z.ai 额度芯片，含滚动 5 小时、本周百分比与 Web 搜索次数，悬浮显示卡片化额度明细，
  *   2) 带"Go 额度"标签的 OpenCode Go 订阅额度芯片，含滚动 5 小时、本周与本月用量百分比，≥80% 预警、≥100% 超支，悬浮显示三档窗口卡片明细，
  *   3) 带"DeepSeek余额"标签的 DeepSeek 余额芯片，含多币种 totalBalance，悬浮显示余额卡片明细，
- *   4) 图标 + "今日" + 今日 tokens / 调用次数 + 三色比例条，含缓存、输入与输出，悬浮显示各类别具体数值。
- * 56px rail 即折叠列：按钮内纵向堆叠，与宽列同序——Z.ai 迷你芯片、Go 迷你芯片，两行含短标签与百分比，
- *   DeepSeek 迷你芯片，两行含货币与金额缩写，今日用量迷你芯片，两行含今日与 tokens 缩写数值，
- *   tooltip 给出今日完整明细。整块按钮任意位置可点。
+ *   4) 勾选「在侧边栏展示」的服务商（内置三家与自助添加厂商）：名称 + 金额或额度百分比芯片，悬浮看摘要，
+ *   5) 图标 + "今日" + 今日 tokens / 调用次数 + 三色比例条，含缓存、输入与输出，悬浮显示各类别具体数值。
+ * 56px rail 即折叠列：按钮内纵向堆叠，与宽列同序——各额度迷你芯片（Z.ai、Go、DeepSeek 与各服务商），
+ *   再今日用量迷你芯片，两行含今日与 tokens 缩写数值，tooltip 给出今日完整明细。整块按钮任意位置可点。
  *
- * Go 额度、DeepSeek 余额与 Z.ai 额度的抓取开关、侧边栏展示开关与抓取间隔来自偏好设置 useUsageSettings（服务端设置文档，见 client/settings.ts）：
- * 关闭抓取则不轮询，对应数据恒为 null，芯片自然不渲染；侧边栏开关只影响底部芯片展示，不影响模态窗内详情。
+ * Z.ai 与 Go 的额度行与各服务商额度行走同一份数据驱动的软写入清单（出现与否只由偏好决定，
+ * 内容各自渲染）；DeepSeek 余额保留专属硬编码行。各行抓取开关、侧边栏展示开关与抓取间隔
+ * 在「服务商」页卡片里改（useUsageSettings 读服务端设置文档，见 client/settings.ts）：
+ * 关闭抓取则不轮询，对应数据恒为 null，芯片显示占位横杠；侧边栏开关只影响底部芯片展示，
+ * 不影响模态窗内详情。
  */
 
 import { IconDataOutlineRegular, Tooltip as BaseTooltip } from '@deepseek-ai/dsh-client-ui-primitives';
@@ -26,18 +30,26 @@ import { HintCard } from '../components/HintCard.tsx';
 import { Tooltip } from '../components/Tooltip.tsx';
 import shared from '../components/UsageStatsCommon.module.css';
 import { avgPerCall, dayTotal, fmt, fmtFull, pctOf, todayOf } from '../stats.ts';
-import { useDeepSeekBalance, useGoQuota, useZaiQuota, type GoWindow, type ZaiWindow } from '../useQuota.ts';
+import { useDeepSeekBalance, useGoQuota, useSidebarProviderQuotas, useZaiQuota, type GoWindow, type ZaiWindow } from '../useQuota.ts';
 import { useSnapshot } from '../useSnapshot.ts';
 import { useUsageSettings } from '../useUsageSettings.ts';
 
 import css from './UsageStatsFooter.module.css';
 import { UsageStatsPanel } from './UsageStatsPanel.tsx';
 
-import type { LocaleFn } from '../locales.ts';
+import type { ProviderQuotaEntry, ProviderQuotaWindow } from '../../types.ts';
+import type { LocaleFn, UsageStatsKey } from '../locales.ts';
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots';
 
 export type UsageStatsFooterProps =
   PropsRuntime<'sidebar.footer.action'> & PropsLocale<'dsh-usage-stats'>;
+
+/** 侧边栏软写入条目：wide 为宽列行内容，rail 为折叠列迷你芯片，key 为渲染键。 */
+interface SoftQuotaItem {
+  key: string
+  wide: React.ReactNode
+  rail: React.ReactNode
+}
 
 /** 单个额度窗口的展示条目，含短名、全名与窗口数据。 */
 interface GoWindowEntry {
@@ -61,6 +73,26 @@ const TIP_LEVEL_COLOR: Record<'ok' | 'warn' | 'over', string> = {
   ok: 'var(--dsw-alias-state-success-primary, #34c759)',
   warn: 'var(--dsw-alias-state-warn-primary, #f5a623)',
   over: 'var(--dsw-alias-state-error-primary, #e5484d)',
+};
+
+/** 软写入的内置余额厂商 id → 显示名文案键（与「服务商」页同一套名称）。 */
+const PROVIDER_NAME_KEY: Record<string, UsageStatsKey> = {
+  siliconflow: 'provider.siliconflow',
+  'xiaomi-mimo': 'provider.xiaomiMimo',
+  volcengine: 'provider.volcengine',
+};
+
+/** 软写入的内置余额厂商 id → 凭据变量名清单（未配置提示用）。 */
+const PROVIDER_KEY_REFS: Record<string, string[]> = {
+  siliconflow: ['SILICONFLOW_API_KEY'],
+  'xiaomi-mimo': ['XIAOMI_MIMO_API_KEY', 'XIAOMI_TOKEN_PLAN_CN'],
+  volcengine: ['VOLCENGINE_ACCESS_KEY_ID', 'VOLCENGINE_SECRET_ACCESS_KEY'],
+};
+
+/** 服务商额度窗口 kind → 文案键。 */
+const WINDOW_LABEL_KEY: Record<ProviderQuotaWindow['kind'], UsageStatsKey> = {
+  plan: 'providers.window.plan',
+  month: 'providers.window.month',
 };
 
 /** tooltip 标题行，13px 字号、700 字重，底部留白与卡片群分隔。 */
@@ -149,6 +181,8 @@ export function UsageStatsFooter({ wide, t }: UsageStatsFooterProps) {
   const [go, refreshQuota] = useGoQuota(settings.goEnabled, settings.goFetchMinutes);
   const [deepseek, refreshDeepSeek] = useDeepSeekBalance(settings.deepseekEnabled, settings.deepseekFetchMinutes);
   const [zai, refreshZai] = useZaiQuota(settings.zaiEnabled, settings.zaiFetchMinutes);
+  // 侧边栏底部的服务商额度：只轮询「启用监控且勾选侧边栏」的子集（内置与自定义各自的子集）。
+  const [providerQuotas] = useSidebarProviderQuotas(settings);
   const rootRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const root = rootRef.current;
@@ -406,10 +440,131 @@ export function UsageStatsFooter({ wide, t }: UsageStatsFooterProps) {
   const toggle = () => setOpen((v) => !v);
   const ariaLabel = t('footer.railAria', { tokens: fmtFull(todayTokens), calls: fmtFull(todayCalls) });
 
-  // 三额度行显隐同一写法：侧边栏展示开关开 + 数据已加载（未启用时 hook 回 null），宽列与 rail 共用。
-  const showZai = settings.showZaiInSidebar && zai !== null;
-  const showGo = settings.showGoInSidebar && go !== null;
-  const showDeepSeek = settings.showDeepSeekInSidebar && deepseek !== null;
+  // 三额度行显隐同一写法：启用监控且侧边栏展示开关开即渲染（数据未加载时给占位横杠），
+  // 宽列与 rail 共用；DeepSeek 保留下方专属硬编码行，Z.ai、Go 与服务商额度条目一样走软写入清单。
+  const showZai = settings.zaiEnabled && settings.showZaiInSidebar;
+  const showGo = settings.goEnabled && settings.showGoInSidebar;
+  const showDeepSeek = settings.deepseekEnabled && settings.showDeepSeekInSidebar;
+
+  // 软写入的服务商额度条目：由偏好配置驱动的统一清单，顺序为「勾选侧边栏的内置三家」再
+  // 自定义厂商，最多 8 家防侧边栏溢出；额度条目按 id 匹配，尚未加载时芯片显示占位。
+  const sidebarProviders: { id: string; label: string; credentialRef: string }[] = [
+    ...settings.builtinProviders
+      .filter((p) => p.enabled && p.showInSidebar)
+      .map((p) => ({
+        id: p.id,
+        label: t(PROVIDER_NAME_KEY[p.id]),
+        credentialRef: (PROVIDER_KEY_REFS[p.id] ?? []).join(' / '),
+      })),
+    ...settings.customProviders
+      .filter((p) => p.enabled && p.showInSidebar)
+      .map((p) => ({ id: p.id, label: p.label, credentialRef: p.credentialRef })),
+  ].slice(0, 8);
+
+  /** 按 id 取该服务商的额度条目；尚未加载时 undefined。 */
+  const providerEntryOf = (id: string): ProviderQuotaEntry | undefined =>
+    providerQuotas?.providers.find((e) => e.id === id);
+
+  /** 单个服务商额度条目的 tooltip 摘要（金额与窗口拼一行；异常态给原因）。 */
+  const providerTip = (provider: { label: string; credentialRef: string }, entry: ProviderQuotaEntry | undefined): string => {
+    if (entry === undefined) return `${provider.label}：${t('state.loading')}`;
+    if (entry.status === 'no-key') return t('providers.notConfigured', { keys: provider.credentialRef });
+    if (entry.status === 'error') return entry.error ?? t('providers.unavailable');
+    const parts = [
+      ...entry.amounts.map((a) => `${a.currency} ${a.total === null ? '--' : Number(a.total).toFixed(2)}`),
+      ...entry.windows.map((w) => `${t(WINDOW_LABEL_KEY[w.kind])} ${Math.round(Math.max(0, Math.min(100, w.percent)))}%`),
+    ];
+    return parts.length > 0 ? `${provider.label}：${parts.join(' · ')}` : t('providers.noData');
+  };
+
+  // 宽列：服务商额度芯片组，金额与窗口各一枚芯片（窗口按档位着色），
+  // 未配置 / 失败 / 加载中分别给提示芯片与横杠。
+  const providerWideRow = (provider: { id: string; label: string; credentialRef: string }, entry: ProviderQuotaEntry | undefined): React.ReactNode => {
+    const tip = providerTip(provider, entry);
+    const chips: React.ReactNode[] = [];
+    if (entry?.status === 'ok') {
+      for (const amount of entry.amounts) {
+        chips.push(
+          <BaseTooltip key={`a-${amount.currency}`} label={tip} side="top" delayMs={400}>
+            <span className={css.goChip}>
+              {amount.currency} {amount.total === null ? '--' : Number(amount.total).toFixed(2)}
+            </span>
+          </BaseTooltip>,
+        );
+      }
+      for (const win of entry.windows) {
+        const pct = Math.round(Math.max(0, Math.min(100, win.percent)));
+        chips.push(
+          <BaseTooltip key={`w-${win.kind}`} label={tip} side="top" delayMs={400}>
+            <span className={`${css.goChip} ${getChipClass(goLevelOf(pct))}`}>
+              {t(WINDOW_LABEL_KEY[win.kind])} {pct}%
+            </span>
+          </BaseTooltip>,
+        );
+      }
+    }
+    if (chips.length === 0) {
+      if (entry?.status === 'no-key') {
+        chips.push(
+          <BaseTooltip key="no-key" label={tip} side="top" delayMs={400}>
+            <span className={`${css.goChip} ${css.goChipHint}`}>{t('state.noKey')}</span>
+          </BaseTooltip>,
+        );
+      } else if (entry?.status === 'error') {
+        chips.push(
+          <BaseTooltip key="error" label={tip} side="top" delayMs={400}>
+            <span className={`${css.goChip} ${css.goChipOver}`}>!</span>
+          </BaseTooltip>,
+        );
+      } else {
+        chips.push(<span className={css.goChip} key="empty">—</span>);
+      }
+    }
+    return (
+      <span className={css.unifiedGoRow} key={provider.id}>
+        <span className={`${css.goLabel} ${css.customGoLabel}`} title={provider.label}>{provider.label}</span>
+        {chips}
+      </span>
+    );
+  };
+
+  // 折叠列：服务商迷你芯片，名 + 首个金额（没有金额时用首个窗口百分比），异常态给 — / ! 并在 tooltip 说明。
+  const providerRailChip = (provider: { id: string; label: string; credentialRef: string }, entry: ProviderQuotaEntry | undefined): React.ReactNode => {
+    const tip = providerTip(provider, entry);
+    let value: string | null = null;
+    if (entry?.status === 'ok') {
+      const amount = entry.amounts[0];
+      if (amount !== undefined && amount.total !== null) value = Number(amount.total).toFixed(2);
+      else if (entry.windows.length > 0) value = `${Math.round(Math.max(0, Math.min(100, entry.windows[0].percent)))}%`;
+    }
+    if (value !== null) {
+      return (
+        <BaseTooltip label={tip} side="top" delayMs={400}>
+          <span className={css.goRailChipBox}>
+            <span className={`${css.goRailChipLabel} ${css.customRailLabel}`}>{provider.label}</span>
+            <span className={css.goRailChipPct}>{value.slice(0, 6)}</span>
+          </span>
+        </BaseTooltip>
+      );
+    }
+    let stateCls = '';
+    let stateText = '—';
+    if (entry?.status === 'error') {
+      stateCls = css.goChipOver;
+      stateText = '!';
+    } else if (entry?.status === 'no-key') {
+      stateCls = css.goChipHint;
+      stateText = t('state.noKey');
+    }
+    return (
+      <BaseTooltip label={tip} side="top" delayMs={400}>
+        <span className={`${css.goRailChipBox} ${stateCls}`}>
+          <span className={`${css.goRailChipLabel} ${css.customRailLabel}`}>{provider.label}</span>
+          <span className={css.goRailChipPct}>{stateText}</span>
+        </span>
+      </BaseTooltip>
+    );
+  };
 
   // ---- Z.ai 额度，含会话与本周百分比及 Web 搜索次数 ----
   const zaiWindows: ZaiWindowEntry[] =
@@ -650,6 +805,91 @@ export function UsageStatsFooter({ wide, t }: UsageStatsFooterProps) {
     );
   };
 
+  // ---- 侧边栏软写入条目清单 ----
+  // Z.ai 与 OpenCode Go 与「服务商」页勾选侧边栏的服务商走同一份数据驱动的清单：
+  // 是否出现只由偏好配置决定，内容各自渲染；DeepSeek 保留下方专属硬编码行。
+  const monitorItems: SoftQuotaItem[] = [];
+  if (showZai) {
+    monitorItems.push({
+      key: 'zai',
+      wide: (
+        <span className={css.unifiedGoRow} key="zai">
+          <span className={css.goLabel}>{t('zai.label')}</span>
+          {zai !== null && zai.status === 'ok' && zaiWindows.length > 0 && zaiWindows.map(zaiChip)}
+          {zai !== null && zai.status === 'ok' && zaiWindows.length === 0 && zaiWeb && (
+            <Tooltip content={zaiTipContent} side="top" delayMs={400}>
+              <span className={css.goChip}>{t('zai.short.webSearches')} {zaiWeb.used}/{zaiWeb.limit}</span>
+            </Tooltip>
+          )}
+          {zai !== null && zai.status === 'ok' && zaiWindows.length === 0 && !zaiWeb && <span className={css.goChip}>—</span>}
+          {zai !== null && zai.status === 'ok' && zaiWeb && zaiWindows.length > 0 && (
+            <Tooltip content={zaiTipContent} side="top" delayMs={400}>
+              <span className={css.goChip}>{t('zai.short.webSearches')} {zaiWeb.used}/{zaiWeb.limit}</span>
+            </Tooltip>
+          )}
+          {zai !== null && (zai.status === 'no-key' || zai.status === 'no-plan') && (
+            <Tooltip content={zaiTipContent} side="top" delayMs={400}>
+              <span className={`${css.goChip} ${css.goChipHint}`}>
+                {zai.status === 'no-plan' ? t('state.noPlan') : t('state.noKey')}
+              </span>
+            </Tooltip>
+          )}
+          {zai !== null && zai.status === 'error' && (
+            <Tooltip content={zaiTipContent} side="top" delayMs={400}>
+              <span className={`${css.goChip} ${css.goChipOver}`}>!</span>
+            </Tooltip>
+          )}
+          {zai === null && <span className={css.goChip}>—</span>}
+        </span>
+      ),
+      rail: (
+        <span className={css.goRailChip} key="zai">
+          {renderZaiRail()}
+        </span>
+      ),
+    });
+  }
+  if (showGo) {
+    monitorItems.push({
+      key: 'go',
+      wide: (
+        <span className={css.unifiedGoRow} key="go">
+          <span className={css.goLabel}>{t('go.label')}</span>
+          {go !== null && go.status === 'ok' && goWindows.length > 0 && goWindows.map(goChip)}
+          {go !== null && go.status === 'ok' && goWindows.length === 0 && <span className={css.goChip}>—</span>}
+          {go !== null && (go.status === 'no-key' || go.status === 'no-plan') && (
+            <Tooltip content={goTipContent} side="top" delayMs={400}>
+              <span className={`${css.goChip} ${css.goChipHint}`}>
+                {go.status === 'no-plan' ? t('state.noPlan') : t('state.noKey')}
+              </span>
+            </Tooltip>
+          )}
+          {go !== null && go.status === 'error' && (
+            <Tooltip content={goTipContent} side="top" delayMs={400}>
+              <span className={`${css.goChip} ${css.goChipOver}`}>!</span>
+            </Tooltip>
+          )}
+          {go === null && <span className={css.goChip}>—</span>}
+        </span>
+      ),
+      rail: (
+        <span className={css.goRailChip} key="go">
+          {renderGoRail()}
+        </span>
+      ),
+    });
+  }
+
+  // 服务商额度条目：内置三家勾选侧边栏的在前、自定义厂商在后；条目未加载时给占位芯片。
+  const providerItems: SoftQuotaItem[] = sidebarProviders.map((provider) => {
+    const entry = providerEntryOf(provider.id);
+    return {
+      key: provider.id,
+      wide: providerWideRow(provider, entry),
+      rail: <span className={css.goRailChip} key={provider.id}>{providerRailChip(provider, entry)}</span>,
+    };
+  });
+
   return (
     <div ref={rootRef} className={wide ? css.root : `${css.root} ${css.rail}`} data-usage-stats-footer>
       <UsageStatsPanel
@@ -679,84 +919,41 @@ export function UsageStatsFooter({ wide, t }: UsageStatsFooterProps) {
           aria-label={ariaLabel}
           onClick={toggle}
         >
-          {showZai && (
-            <span className={css.unifiedGoRow}>
-              <span className={css.goLabel}>{t('zai.label')}</span>
-              {zai.status === 'ok' && zaiWindows.length > 0 && zaiWindows.map(zaiChip)}
-              {zai.status === 'ok' && zaiWindows.length === 0 && zaiWeb && (
-                <Tooltip content={zaiTipContent} side="top" delayMs={400}>
-                  <span className={css.goChip}>{t('zai.short.webSearches')} {zaiWeb.used}/{zaiWeb.limit}</span>
-                </Tooltip>
-              )}
-              {zai.status === 'ok' && zaiWindows.length === 0 && !zaiWeb && <span className={css.goChip}>—</span>}
-              {zai.status === 'ok' && zaiWeb && zaiWindows.length > 0 && (
-                <Tooltip content={zaiTipContent} side="top" delayMs={400}>
-                  <span className={css.goChip}>{t('zai.short.webSearches')} {zaiWeb.used}/{zaiWeb.limit}</span>
-                </Tooltip>
-              )}
-              {(zai.status === 'no-key' || zai.status === 'no-plan') && (
-                <Tooltip content={zaiTipContent} side="top" delayMs={400}>
-                  <span className={`${css.goChip} ${css.goChipHint}`}>
-                    {zai.status === 'no-plan' ? t('state.noPlan') : t('state.noKey')}
-                  </span>
-                </Tooltip>
-              )}
-              {zai.status === 'error' && (
-                <Tooltip content={zaiTipContent} side="top" delayMs={400}>
-                  <span className={`${css.goChip} ${css.goChipOver}`}>!</span>
-                </Tooltip>
-              )}
-            </span>
-          )}
-          {showGo && (
-            <span className={css.unifiedGoRow}>
-              <span className={css.goLabel}>{t('go.label')}</span>
-              {go.status === 'ok' && goWindows.length > 0 && goWindows.map(goChip)}
-              {go.status === 'ok' && goWindows.length === 0 && <span className={css.goChip}>—</span>}
-              {(go.status === 'no-key' || go.status === 'no-plan') && (
-                <Tooltip content={goTipContent} side="top" delayMs={400}>
-                  <span className={`${css.goChip} ${css.goChipHint}`}>
-                    {go.status === 'no-plan' ? t('state.noPlan') : t('state.noKey')}
-                  </span>
-                </Tooltip>
-              )}
-              {go.status === 'error' && (
-                <Tooltip content={goTipContent} side="top" delayMs={400}>
-                  <span className={`${css.goChip} ${css.goChipOver}`}>!</span>
-                </Tooltip>
-              )}
-            </span>
-          )}
+          {/* 软写入条目：Z.ai 与 Go 由偏好配置驱动，与服务商条目同一清单机制 */}
+          {monitorItems.map((item) => item.wide)}
           {showDeepSeek && (
             <span className={css.unifiedGoRow}>
               <span className={css.goLabel}>{t('deepseek.label')}</span>
-              {deepseek.status === 'ok' && deepseek.isAvailable && deepseek.balances.length > 0 && deepseek.balances.map((b) => (
+              {deepseek !== null && deepseek.status === 'ok' && deepseek.isAvailable && deepseek.balances.length > 0 && deepseek.balances.map((b) => (
                 <Tooltip key={b.currency} content={deepseekWideTooltip} side="top" delayMs={400}>
                   <span className={css.goChip}>{b.currency} {b.totalBalance}</span>
                 </Tooltip>
               ))}
-              {deepseek.status === 'ok' && deepseek.isAvailable && deepseek.balances.length === 0 && (
+              {deepseek !== null && deepseek.status === 'ok' && deepseek.isAvailable && deepseek.balances.length === 0 && (
                 <Tooltip content={deepseekWideTooltip} side="top" delayMs={400}>
                   <span className={css.goChip}>—</span>
                 </Tooltip>
               )}
-              {deepseek.status === 'ok' && !deepseek.isAvailable && (
+              {deepseek !== null && deepseek.status === 'ok' && !deepseek.isAvailable && (
                 <BaseTooltip label={t('deepseek.notAvailable')} side="top" delayMs={400}>
                   <span className={css.goChip}>—</span>
                 </BaseTooltip>
               )}
-              {deepseek.status === 'no-key' && (
+              {deepseek !== null && deepseek.status === 'no-key' && (
                 <BaseTooltip label={t('deepseek.notConfigured')} side="top" delayMs={400}>
                   <span className={`${css.goChip} ${css.goChipHint}`}>{t('state.noKey')}</span>
                 </BaseTooltip>
               )}
-              {deepseek.status === 'error' && (
+              {deepseek !== null && deepseek.status === 'error' && (
                 <BaseTooltip label={t('deepseek.unavailable')} side="top" delayMs={400}>
                   <span className={`${css.goChip} ${css.goChipOver}`}>!</span>
                 </BaseTooltip>
               )}
+              {deepseek === null && <span className={css.goChip}>—</span>}
             </span>
           )}
+          {/* 服务商额度条目：勾选侧边栏的内置三家在前、自定义厂商在后 */}
+          {providerItems.map((item) => item.wide)}
           <span className={css.unifiedMain}>
             <span className={css.badgeIcon}><IconDataOutlineRegular size={14} /></span>
             <span className={css.badgeLabel}>{t('footer.todayLabel')}</span>
@@ -807,21 +1004,15 @@ export function UsageStatsFooter({ wide, t }: UsageStatsFooterProps) {
           aria-label={ariaLabel}
           onClick={toggle}
         >
-          {showZai && (
-            <span className={css.goRailChip}>
-              {renderZaiRail()}
-            </span>
-          )}
-          {showGo && (
-            <span className={css.goRailChip}>
-              {renderGoRail()}
-            </span>
-          )}
+          {/* 软写入条目：Z.ai 与 Go 由偏好配置驱动，与服务商条目同一清单机制 */}
+          {monitorItems.map((item) => item.rail)}
           {showDeepSeek && (
             <span className={css.goRailChip}>
               {renderDeepSeekRail()}
             </span>
           )}
+          {/* 服务商额度条目：勾选侧边栏的内置三家在前、自定义厂商在后 */}
+          {providerItems.map((item) => item.rail)}
           {/* 今日用量迷你芯片，折叠态也展示今日 tokens 总量为缩写值，tooltip 为完整明细，按需求使用今日文字 */}
           <Tooltip content={railContent} side="right" delayMs={500}>
             <span className={css.goRailChipBox}>

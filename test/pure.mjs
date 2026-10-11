@@ -23,7 +23,7 @@
  *     localStorage 迁移（等表单落定、成功写入才删旧键、不可用时保留）；服务端
  *     条目 schema（字段全 volatile、解析值等于共享默认值、条目 id 与浏览器端常量一致）；
  *   - stats：格式化/会话分组/时间范围/图表几何/快照截断；
- *   - 三额度 fixture：无 key、无 plan、非法归一、key 回退、go 缓存单飞。
+ *   - 额度 fixture：无 key、无 plan、非法归一、key 回退、go 缓存单飞。
  */
 import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -80,6 +80,7 @@ import {
   usageTotal,
 } from '../src/client/stats.ts';
 import {
+  BUILTIN_PROVIDER_IDS,
   diffFromDefaults,
   DEEPSEEK_FETCH_DEFAULT_MINUTES,
   DEEPSEEK_FETCH_MIN_MINUTES,
@@ -87,6 +88,8 @@ import {
   GO_FETCH_DEFAULT_MINUTES,
   GO_FETCH_MIN_MINUTES,
   MODEL_REDIRECT_MAX_RULES,
+  PROVIDERS_FETCH_DEFAULT_MINUTES,
+  PROVIDERS_FETCH_MIN_MINUTES,
   QUOTA_CACHE_TTL_MS,
   QUOTA_MIN_FETCH_MS,
   SERIES_MAX_DAYS,
@@ -94,6 +97,7 @@ import {
   USAGE_SETTINGS_NAMESPACE,
   ZAI_FETCH_DEFAULT_MINUTES,
   ZAI_FETCH_MIN_MINUTES,
+  CUSTOM_PROVIDER_MAX,
   cacheTotal,
   clampDeepSeekFetchMinutes,
   clampGoFetchMinutes,
@@ -105,7 +109,9 @@ import {
   goPercent,
   goResetsAt,
   isCompleteRedirect,
+  normalizeBuiltinProviders,
   normalizeModelRedirects,
+  normalizeCustomProviders,
   normalizeUsageSettings,
   parseJsonLine,
   splitModelKey,
@@ -468,9 +474,10 @@ describe('fork 继承前缀：只折本会话自有事件', () => {
 });
 
 describe('remote：手写严格贡献', () => {
-  it('7 个一元方法与服务一致', () => {
+  it('10 个一元方法与服务一致', () => {
     assert.deepEqual([...METHOD_NAMES], [
-      'snapshot', 'rebuild', 'clear', 'seal', 'goQuota', 'deepseekBalance', 'zaiQuota',
+      'snapshot', 'rebuild', 'clear', 'seal', 'goQuota', 'deepseekBalance', 'zaiQuota', 'providerQuotas',
+      'describeCredential', 'saveCredential',
     ]);
     assert.equal(USAGE_STATS_REMOTE.package, '@xfqz86/dsh-usage-stats');
     assert.deepEqual(
@@ -1338,6 +1345,53 @@ describe('偏好设置：归一化与写入操作', () => {
   });
 });
 
+describe('内置服务商偏好：按家归一化与旧共享开关迁移', () => {
+  it('永远产出固定三家、顺序与 BUILTIN_PROVIDER_IDS 一致，默认全启用且不上侧边栏', () => {
+    const out = normalizeBuiltinProviders(undefined);
+    assert.deepEqual(out, USAGE_SETTINGS_DEFAULTS.builtinProviders);
+    assert.deepEqual(out.map((p) => p.id), [...BUILTIN_PROVIDER_IDS]);
+    assert.ok(out.every((p) => p.enabled === true && p.showInSidebar === false));
+    assert.equal(out[0].fetchMinutes, PROVIDERS_FETCH_DEFAULT_MINUTES);
+  });
+
+  it('坏条目/坏字段逐项回默认，间隔夹到下限，未知 id 丢弃、重复 id 只留首个', () => {
+    const out = normalizeBuiltinProviders([
+      null,
+      { id: 'nope', enabled: false },
+      { id: 'siliconflow', enabled: false, showInSidebar: 'yes', fetchMinutes: 1 },
+      { id: 'volcengine', fetchMinutes: 9.4 },
+      { id: 'volcengine', enabled: false },
+    ]);
+    assert.deepEqual(out.map((p) => p.id), [...BUILTIN_PROVIDER_IDS]);
+    assert.equal(out[0].enabled, false);
+    assert.equal(out[0].showInSidebar, false);
+    assert.equal(out[0].fetchMinutes, PROVIDERS_FETCH_MIN_MINUTES);
+    assert.equal(out[2].enabled, true);
+    assert.equal(out[2].fetchMinutes, 9);
+  });
+
+  it('旧共享开关迁移：providersEnabled/providersFetchMinutes 灌进三家初始值，按家值优先', () => {
+    const migrated = normalizeUsageSettings({ providersEnabled: false, providersFetchMinutes: 8 });
+    assert.ok(migrated.builtinProviders.every((p) => p.enabled === false && p.fetchMinutes === 8));
+    assert.equal(Object.prototype.hasOwnProperty.call(migrated, 'providersEnabled'), false);
+    const mixed = normalizeUsageSettings({
+      providersEnabled: false,
+      builtinProviders: [{ id: 'siliconflow', enabled: true, showInSidebar: true, fetchMinutes: 4 }],
+    });
+    assert.equal(mixed.builtinProviders[0].enabled, true);
+    assert.equal(mixed.builtinProviders[0].showInSidebar, true);
+    assert.equal(mixed.builtinProviders[0].fetchMinutes, 4);
+    assert.equal(mixed.builtinProviders[1].enabled, false);
+  });
+
+  it('归一化结果与默认值逐字段相等：diffFromDefaults 不把内置三家当用户改动；数组整表写入', () => {
+    assert.deepEqual(diffFromDefaults(normalizeUsageSettings(null)), {});
+    const ops = settingOps({ builtinProviders: normalizeBuiltinProviders(undefined) });
+    assert.equal(ops.length, 1);
+    assert.equal(ops[0].path[0], 'builtinProviders');
+  });
+});
+
 describe('偏好设置：作用域视图与写入', () => {
   afterEach(() => { detachUsageSettings(); });
 
@@ -1545,5 +1599,108 @@ describe('偏好设置：服务端条目 schema', () => {
     assert.ok(entry, 'cordis.patch.yml 必须声明插件条目 id');
     assert.equal(entry[1], USAGE_SETTINGS_NAMESPACE);
     assert.match(patch, /^\s*name: '@xfqz86\/dsh-usage-stats'$/m);
+  });
+});
+
+describe('自定义 Bearer 服务商：配置归一化', () => {
+  const valid = (over = {}) => ({
+    id: 'custom-1',
+    label: 'Kimi',
+    endpoint: 'https://api.moonshot.cn/v1/users/me/balance',
+    credentialRef: 'MOONSHOT_API_KEY',
+    valuePath: 'data.available_balance',
+    currency: 'CNY',
+    enabled: true,
+    showInSidebar: true,
+    fetchMinutes: 4,
+    ...over,
+  });
+
+  it('非数组/空数组归 [], 合法条目透传并去空白', () => {
+    assert.deepEqual(normalizeCustomProviders(null), []);
+    assert.deepEqual(normalizeCustomProviders('x'), []);
+    assert.deepEqual(normalizeCustomProviders([null, 1, 'x', {}]), []);
+    const out = normalizeCustomProviders([valid()]);
+    assert.equal(out.length, 1);
+    assert.equal(out[0].id, 'custom-1');
+    assert.equal(out[0].fetchMinutes, 4);
+  });
+
+  it('http 地址 / 非法变量名 / 空或重复 id 的条目被丢弃', () => {
+    assert.deepEqual(normalizeCustomProviders([valid({ endpoint: 'http://x/y' })]), []);
+    assert.deepEqual(normalizeCustomProviders([valid({ credentialRef: '1BAD' })]), []);
+    assert.deepEqual(normalizeCustomProviders([valid({ id: '' })]), []);
+    assert.deepEqual(normalizeCustomProviders([valid({ id: 'a' }), valid({ id: 'a', label: 'dup' })]).length, 1);
+  });
+
+  it('缺省字段兜底：label 用 id、路径/币种默认、布尔默认、间隔夹取', () => {
+    const out = normalizeCustomProviders([{ id: 'custom-2', endpoint: 'https://x/y', credentialRef: 'X_KEY' }]);
+    assert.equal(out[0].label, 'custom-2');
+    assert.equal(out[0].valuePath, 'data.balance');
+    assert.equal(out[0].currency, 'CNY');
+    assert.equal(out[0].enabled, true);
+    assert.equal(out[0].showInSidebar, false);
+    assert.equal(out[0].fetchMinutes, PROVIDERS_FETCH_DEFAULT_MINUTES);
+    const clamped = normalizeCustomProviders([valid({ fetchMinutes: 1 })]);
+    assert.equal(clamped[0].fetchMinutes, PROVIDERS_FETCH_MIN_MINUTES);
+  });
+
+  it('数量截断到上限', () => {
+    const many = Array.from({ length: CUSTOM_PROVIDER_MAX + 5 }, (_, i) =>
+      valid({ id: `custom-${i}`, credentialRef: `K${i}_KEY` }));
+    assert.equal(normalizeCustomProviders(many).length, CUSTOM_PROVIDER_MAX);
+  });
+
+  it('UsageSettings 归一化始终带 customProviders，默认值含该字段', () => {
+    assert.deepEqual(normalizeUsageSettings({}).customProviders, []);
+    assert.ok(Object.prototype.hasOwnProperty.call(USAGE_SETTINGS_DEFAULTS, 'customProviders'));
+  });
+});
+
+describe('自定义 Bearer 服务商：通用余额查询', async () => {
+  const { fetchCustomProviderQuota } = await import('../src/host/customProviderQuota.ts');
+  const query = (over = {}) => ({
+    id: 'custom-1',
+    endpoint: 'https://api.moonshot.cn/v1/users/me/balance',
+    credentialRef: 'MOONSHOT_API_KEY',
+    valuePath: 'data.available_balance',
+    currency: 'CNY',
+    ...over,
+  });
+  // 提供已配置凭据的最小桩：只实现 resolve，返回非空 value。
+  const creds = { resolve: async () => ({ value: 'sk-test', source: 'file' }) };
+
+  it('无凭据中心/未配置 → no-key，不抛错', async () => {
+    const r = await fetchCustomProviderQuota(query(), undefined);
+    assert.equal(r.status, 'no-key');
+    assert.equal(r.id, 'custom-1');
+  });
+
+  it('非法变量名 / 非 https 地址 → error', async () => {
+    assert.equal((await fetchCustomProviderQuota(query({ credentialRef: '1BAD' }), creds)).status, 'error');
+    assert.equal((await fetchCustomProviderQuota(query({ endpoint: 'http://x/y' }), creds)).status, 'error');
+  });
+
+  it('200 且点路径命中数值 → ok，金额按币种归一', async () => {
+    mockFetch(async () => new Response(JSON.stringify({ data: { available_balance: '12.5' } }), { status: 200 }));
+    const r = await fetchCustomProviderQuota(query(), creds);
+    assert.equal(r.status, 'ok');
+    assert.equal(r.amounts[0].currency, 'CNY');
+    assert.equal(r.amounts[0].total, 12.5);
+  });
+
+  it('401 → no-key；非 2xx → error；路径缺失/非数值 → error', async () => {
+    mockFetch(async () => new Response('{}', { status: 401 }));
+    assert.equal((await fetchCustomProviderQuota(query(), creds)).status, 'no-key');
+    mockFetch(async () => new Response('err', { status: 500 }));
+    assert.equal((await fetchCustomProviderQuota(query(), creds)).status, 'error');
+    mockFetch(async () => new Response(JSON.stringify({ data: {} }), { status: 200 }));
+    assert.equal((await fetchCustomProviderQuota(query(), creds)).status, 'error');
+  });
+
+  it('危险点路径不取值（无原型链/任意访问面）', async () => {
+    mockFetch(async () => new Response(JSON.stringify({ data: { x: 1 } }), { status: 200 }));
+    assert.equal((await fetchCustomProviderQuota(query({ valuePath: 'data[x]' }), creds)).status, 'error');
+    assert.equal((await fetchCustomProviderQuota(query({ valuePath: 'constructor' }), creds)).status, 'error');
   });
 });

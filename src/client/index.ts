@@ -11,7 +11,7 @@
  *   收窄为三额度迷你芯片与今日用量芯片的纵向堆叠，明细移入各自 Tooltip；
  *   点击打开模态窗详情，包含汇总、模型拆分、会话列表、每日趋势曲线和热力图。
  * - 数据来自服务端 usageStats/snapshot（ctx.remote，经网关统一鉴权）。
- * - 偏好设置（三额度抓取开关、侧边栏展示开关、抓取间隔、会话徽标开关、
+ * - 偏好设置（Go/DeepSeek/Z.ai 三额度与服务商额度的抓取开关、侧边栏展示开关、抓取间隔、会话徽标开关、
  *   模型统计重定向规则表）来自
  *   服务端 profile 配置文档：表单取自 ctx.configForms 的 `usage-stats` 插件条目
  *   （schema 在 src/host/settings.ts，随条目 Config 下发），组件经 useUsageSettings

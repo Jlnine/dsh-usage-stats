@@ -27,3 +27,22 @@ export async function postLedgerApi(endpoint: 'rebuild' | 'clear', onRefresh: ()
   if (!result.ok) throw new Error(`${endpoint} failed`);
   onRefresh();
 }
+
+/**
+ * 探测某环境变量名在凭据中心是否已配置、是否可写（不回传密钥值）。
+ * 供「服务商」页在保存 Key 前提示同名覆盖。
+ */
+export async function describeCredential(ref: string): Promise<{ configured: boolean; writable: boolean }> {
+  const result = await usageStatsRemote().describeCredential({ ref });
+  if (!result.ok) throw new Error(result.error.message || 'describeCredential failed');
+  return { configured: result.value.configured, writable: result.value.writable };
+}
+
+/**
+ * 把「服务商」页填写的 API Key 存入 DSH 凭据中心；失败抛出带服务端原因的错误，
+ * 由表单显示（如变量名非法、该名被启动环境只读占用、凭据中心不可写）。
+ */
+export async function saveCredential(ref: string, value: string): Promise<void> {
+  const result = await usageStatsRemote().saveCredential({ ref, value });
+  if (!result.ok) throw new Error(result.error.message || 'saveCredential failed');
+}

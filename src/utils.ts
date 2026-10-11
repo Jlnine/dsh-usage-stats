@@ -13,7 +13,7 @@
  *     会话发现 logs.ts，客户端格式化、分桶、图表几何 client/stats.ts
  *     等仍留在各自模块，这里只放「多文件共用的」部分。
  */
-import type { ModelRedirect, GoWindow, UsageSettings } from './types.ts';
+import type { BuiltinProviderSettings, CustomProviderConfig, ModelRedirect, GoWindow, UsageSettings } from './types.ts';
 
 /** 时间戳对应的本地零点，避免 UTC 漂移，host 折叠与会话图共用同一套日划分。 */
 export function startOfDay(timeMs: number): number {
@@ -76,7 +76,7 @@ export const QUOTA_CACHE_TTL_MS = 5 * 60 * 1000;
 
 /**
  * 额度有效 TTL：`min(上限, max(下限, 间隔))`，让实际打官方端点的频率与
- * 设置一致且不短于下限；未提供间隔时用默认上限。三额度查询共用同一公式。
+ * 设置一致且不短于下限；未提供间隔时用默认上限。四路额度查询共用同一公式。
  */
 export function effectiveQuotaTtl(intervalMinutes?: number): number {
   if (typeof intervalMinutes === 'number' && Number.isFinite(intervalMinutes)) {
@@ -125,6 +125,18 @@ export const DEEPSEEK_FETCH_DEFAULT_MINUTES = 5;
 export const ZAI_FETCH_MIN_MINUTES = 3;
 /** Z.ai 额度抓取间隔默认值，单位分钟。 */
 export const ZAI_FETCH_DEFAULT_MINUTES = 5;
+/** 服务商额度抓取间隔下限，单位分钟。 */
+export const PROVIDERS_FETCH_MIN_MINUTES = 3;
+/** 服务商额度抓取间隔默认值，单位分钟。 */
+export const PROVIDERS_FETCH_DEFAULT_MINUTES = 5;
+/** 内置服务商 id 表（不可自助编辑/删除），与 host PROVIDER_FETCHERS 顺序一致。 */
+export const BUILTIN_PROVIDER_IDS = ['siliconflow', 'xiaomi-mimo', 'volcengine'] as const;
+/** 自助添加 Bearer 余额厂商的数量上限：约束偏好文档体积、侧边栏芯片数与轮询并发。 */
+export const CUSTOM_PROVIDER_MAX = 30;
+/** 凭据环境变量名白名单：POSIX shell 标识符，和凭据中心 credentialRef 同一口径。 */
+export const CREDENTIAL_REF_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+/** 自定义厂商 Key 明文长度上限：足以容纳各类 Bearer token，又挡住误填整段文本。 */
+export const CREDENTIAL_VALUE_MAX_LENGTH = 4096;
 /** 模型统计重定向规则条数上限：约束浏览器端归并成本与偏好文档体积。 */
 export const MODEL_REDIRECT_MAX_RULES = 50;
 
@@ -139,9 +151,25 @@ export const USAGE_SETTINGS_DEFAULTS: UsageSettings = {
   zaiEnabled: true,
   showZaiInSidebar: true,
   zaiFetchMinutes: ZAI_FETCH_DEFAULT_MINUTES,
+  builtinProviders: defaultBuiltinProviders(),
   showSessionId: true,
   modelRedirects: [],
+  customProviders: [],
 };
+
+/**
+ * 内置三家偏好默认值：全启用监控、不在侧边栏展示、共用一个默认间隔。
+ * 与 {@link normalizeBuiltinProviders} 用同一构造，保证「无用户片段」时
+ * 归一化结果与默认值逐字段相等（diffFromDefaults 不会误判为用户改动）。
+ */
+export function defaultBuiltinProviders(): BuiltinProviderSettings[] {
+  return BUILTIN_PROVIDER_IDS.map((id) => ({
+    id,
+    enabled: true,
+    showInSidebar: false,
+    fetchMinutes: PROVIDERS_FETCH_DEFAULT_MINUTES,
+  }));
+}
 
 /**
  * 偏好字段比较：数组按 JSON 比——每次归一化都会新建数组，引用比较永远判为不同，
@@ -184,6 +212,18 @@ export function clampZaiFetchMinutes(value: number): number {
   return Math.max(ZAI_FETCH_MIN_MINUTES, Math.round(n));
 }
 
+/** 把任意数值夹成合法服务商额度抓取间隔：整数分钟、不低于下限，非法值回退为默认值。 */
+export function clampProvidersFetchMinutes(value: number): number {
+  const n = Number.isFinite(value) ? value : PROVIDERS_FETCH_DEFAULT_MINUTES;
+  return Math.max(PROVIDERS_FETCH_MIN_MINUTES, Math.round(n));
+}
+
+/** 把任意数值夹成合法的单个自定义厂商抓取间隔：与内置服务商同一下限/默认。 */
+export function clampCustomProviderFetchMinutes(value: number): number {
+  const n = Number.isFinite(value) ? value : PROVIDERS_FETCH_DEFAULT_MINUTES;
+  return Math.max(PROVIDERS_FETCH_MIN_MINUTES, Math.round(n));
+}
+
 /**
  * 模型统计重定向规则归一化：只收数组，元素必须是对象，四个字段取字符串并去首尾空白，
  * 非字符串字段记空串；四项全空的条目是编辑器里的空行，直接丢弃；半填的保留
@@ -217,12 +257,87 @@ export function isCompleteRedirect(rule: ModelRedirect): boolean {
 }
 
 /**
+ * 自助 Bearer 厂商配置归一化：只收数组、元素必须是对象；按 id 去重，超过上限截断。
+ * 每个有效条目必须具备唯一 id、https 余额地址、合法凭据变量名，否则整条丢弃——
+ * 手改 profile 文档或旧版本残留的坏形状不会进界面。布尔/间隔按字段夹取，与设置 schema 同源。
+ */
+export function normalizeCustomProviders(raw: unknown): CustomProviderConfig[] {
+  if (!Array.isArray(raw)) return [];
+  const out: CustomProviderConfig[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    if (out.length >= CUSTOM_PROVIDER_MAX) break;
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) continue;
+    const s = item as Record<string, unknown>;
+    const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
+    const id = str(s.id);
+    if (id === '' || seen.has(id)) continue;
+    const endpoint = str(s.endpoint);
+    const ref = str(s.credentialRef);
+    if (!/^https:\/\//i.test(endpoint) || !CREDENTIAL_REF_PATTERN.test(ref)) continue;
+    seen.add(id);
+    const valuePath = str(s.valuePath) || 'data.balance';
+    const currency = str(s.currency) || 'CNY';
+    out.push({
+      id,
+      label: str(s.label) || id,
+      endpoint,
+      credentialRef: ref,
+      valuePath,
+      currency: currency.slice(0, 8),
+      enabled: typeof s.enabled === 'boolean' ? s.enabled : true,
+      showInSidebar: typeof s.showInSidebar === 'boolean' ? s.showInSidebar : false,
+      fetchMinutes: clampCustomProviderFetchMinutes(typeof s.fetchMinutes === 'number' ? s.fetchMinutes : NaN),
+    });
+  }
+  return out;
+}
+
+/**
+ * 内置三家偏好归一化：始终产出固定三家、顺序与 {@link BUILTIN_PROVIDER_IDS} 一致，
+ * 缺条目/坏字段回默认值，间隔夹到下限（手改 profile 文档或旧版本残留都可能给出坏形状）。
+ *
+ * `legacy` 承载已被按家配置取代的旧版共享开关（providersEnabled / providersFetchMinutes）：
+ * 旧文档里还有这两个字段时，把它们灌进三家的初始值，升级不丢用户选择。
+ */
+export function normalizeBuiltinProviders(
+  raw: unknown,
+  legacy?: { enabled?: unknown; fetchMinutes?: unknown },
+): BuiltinProviderSettings[] {
+  const byId = new Map<string, Record<string, unknown>>();
+  if (Array.isArray(raw)) {
+    for (const item of raw) {
+      if (item === null || typeof item !== 'object' || Array.isArray(item)) continue;
+      const s = item as Record<string, unknown>;
+      const id = typeof s.id === 'string' ? s.id.trim() : '';
+      if (id === '' || byId.has(id)) continue;
+      byId.set(id, s);
+    }
+  }
+  const legacyEnabled = typeof legacy?.enabled === 'boolean' ? legacy.enabled : true;
+  const legacyMinutes = typeof legacy?.fetchMinutes === 'number' && Number.isFinite(legacy.fetchMinutes)
+    ? clampProvidersFetchMinutes(legacy.fetchMinutes)
+    : PROVIDERS_FETCH_DEFAULT_MINUTES;
+  return BUILTIN_PROVIDER_IDS.map((id) => {
+    const s = byId.get(id);
+    return {
+      id,
+      enabled: typeof s?.enabled === 'boolean' ? s.enabled : legacyEnabled,
+      showInSidebar: typeof s?.showInSidebar === 'boolean' ? s.showInSidebar : false,
+      fetchMinutes: clampProvidersFetchMinutes(typeof s?.fetchMinutes === 'number' ? s.fetchMinutes : legacyMinutes),
+    };
+  });
+}
+
+/**
  * 字段级归一化：布尔字段只收布尔，间隔字段只收有限数并夹取，其余回退默认值。
  * 归一化对象为插件条目的解析值——写入方（浏览器端 ConfigForm）与服务端
  * schema 都保证字段齐备，但手改 profile 配置文档或旧版本残留仍可能给出坏值。
  */
 export function normalizeUsageSettings(raw: Partial<UsageSettings> | null | undefined): UsageSettings {
   const src = raw ?? {};
+  // 旧版共享开关字段（已移除）仍可能留在配置文档里，读出用于 builtinProviders 的一次性迁移。
+  const compat = src as Record<string, unknown>;
   const bool = (v: unknown, fallback: boolean): boolean => (typeof v === 'boolean' ? v : fallback);
   const minutes = (v: unknown, clamp: (n: number) => number, fallback: number): number =>
     (typeof v === 'number' && Number.isFinite(v) ? clamp(v) : fallback);
@@ -236,7 +351,12 @@ export function normalizeUsageSettings(raw: Partial<UsageSettings> | null | unde
     zaiEnabled: bool(src.zaiEnabled, USAGE_SETTINGS_DEFAULTS.zaiEnabled),
     showZaiInSidebar: bool(src.showZaiInSidebar, USAGE_SETTINGS_DEFAULTS.showZaiInSidebar),
     zaiFetchMinutes: minutes(src.zaiFetchMinutes, clampZaiFetchMinutes, USAGE_SETTINGS_DEFAULTS.zaiFetchMinutes),
+    builtinProviders: normalizeBuiltinProviders(compat.builtinProviders, {
+      enabled: compat.providersEnabled,
+      fetchMinutes: compat.providersFetchMinutes,
+    }),
     showSessionId: bool(src.showSessionId, USAGE_SETTINGS_DEFAULTS.showSessionId),
     modelRedirects: normalizeModelRedirects(src.modelRedirects),
+    customProviders: normalizeCustomProviders(src.customProviders),
   };
 }
