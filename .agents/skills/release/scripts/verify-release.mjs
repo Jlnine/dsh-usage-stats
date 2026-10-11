@@ -49,6 +49,22 @@ function run(cmd, args, opts = {}) {
   return { code: r.status ?? -1, out: `${r.stdout ?? ''}${r.stderr ?? ''}` }
 }
 
+/**
+ * pnpm 的启动方式：Windows 上 pnpm 一般只以 `.cmd` 提供（或本机根本没装、只有 corepack），
+ * Node 的 spawnSync（shell: false）无法执行这类脚本文件，会以 ENOENT 收场；经 shell 调
+ * `corepack pnpm` 既能找到，又按 `package.json` 的 `packageManager` 取版本，无需全局安装。
+ * POSIX（CI）上仍直接调用 pnpm。
+ */
+const PNPM = process.platform === 'win32' ? 'corepack pnpm' : 'pnpm'
+
+/** 跑一条 pnpm 命令；Windows 下经 shell 启动（见 {@link PNPM} 的说明）。 */
+function runPnpm(args, opts = {}) {
+  // shell 下把参数并入命令行：Node 对「shell + args」组合有 DEP0190 弃用告警；
+  // 这里的参数都是脚本内的固定值（无外部输入），不存在注入口。
+  if (process.platform === 'win32') return run([PNPM, ...args].join(' '), [], { shell: true, ...opts })
+  return run(PNPM, args, opts)
+}
+
 /** 剪枝白名单：从 prune-package 动作的默认值读取，避免两处维护。 */
 function pruneAllowlist() {
   const action = readFileSync(join(ROOT, '.github/actions/prune-package/action.yml'), 'utf8')
@@ -98,7 +114,7 @@ async function main() {
 
   // 1) 生产构建
   console.log('1/5 生产构建 …')
-  const build = run('pnpm', ['build'], { env: { ...process.env, NODE_ENV: 'production' } })
+  const build = runPnpm(['build'], { env: { ...process.env, NODE_ENV: 'production' } })
   if (build.code !== 0) { fail(`生产构建失败：\n${build.out}`); return }
   const hostSize = readFileSync(join(ROOT, 'lib/index.js')).length
   const clientSize = readFileSync(join(ROOT, 'lib/client.js')).length
@@ -135,7 +151,7 @@ async function main() {
   const pruned = {}
   for (const key of pruneAllowlist()) if (key in manifest) pruned[key] = manifest[key]
   writeFileSync(join(staging, 'package.json'), `${JSON.stringify(pruned, null, 2)}\n`)
-  const packed = run('pnpm', ['pack', '--pack-destination', OUT_DIR], { cwd: staging })
+  const packed = runPnpm(['pack', '--pack-destination', OUT_DIR], { cwd: staging })
   if (packed.code !== 0) { fail(`打包失败：\n${packed.out}`); return }  const tgz = join(OUT_DIR, `${manifest.name.replace('@', '').replace('/', '-')}-${manifest.version}.tgz`)
   if (!existsSync(tgz)) { fail(`未产出预期 tarball：${tgz}`); return }
   // 固定文件名的副本（与 GitHub Release 附件同名）：装机实测按它安装，路径不随版本号变化
@@ -146,7 +162,8 @@ async function main() {
 
   // 4) 包内容：7 文件、无 map、剪枝后的 manifest、包内服务端产物与刚验证过的一致
   console.log('4/5 校验包内容 …')
-  const listed = run('tar', ['-tzf', tgz]).out.split('\n')
+  // Windows 上 tar 的清单输出是 CRLF，比较前统一成 LF（POSIX CI 本来就是 LF，无影响）
+  const listed = run('tar', ['-tzf', tgz]).out.replace(/\r\n/g, '\n').split('\n')
     .filter((f) => f !== '' && !f.endsWith('/')).sort()
   const missing = EXPECTED_FILES.filter((f) => !listed.includes(f))
   if (missing.length > 0) fail(`包内缺交付物：${missing.join(', ')}`)
@@ -166,7 +183,7 @@ async function main() {
 
   // 5) 还原开发态 lib/（link: 安装用的是这份，留在生产态会缺 map 且难调试）
   console.log('5/5 还原开发态构建 …')
-  const restore = run('pnpm', ['build'])
+  const restore = runPnpm(['build'])
   if (restore.code !== 0) fail(`开发态构建还原失败：\n${restore.out}`)
   else pass('lib/ 已还原为开发态')
 
